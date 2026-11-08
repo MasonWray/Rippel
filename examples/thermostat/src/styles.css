@@ -1,0 +1,101 @@
+.screen {
+  width: 100%;
+  height: 100%;
+  padding: 12px 16px;
+  background: #10141b;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.top-bar {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.room {
+  color: #e8ecf2;
+  font-size: 16px;
+}
+
+.status {
+  color: #8a93a3;
+  font-size: 12px;
+}
+
+.offline {
+  color: #f0a35b;
+}
+
+.reading {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+}
+
+.temperature {
+  color: #ffffff;
+  font: 56px lato;
+}
+
+.mode {
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: #10141b;
+}
+
+.mode-heat {
+  background: #f27b50;
+}
+
+.mode-cool {
+  background: #58a6f5;
+}
+
+.mode-hold {
+  background: #7fcf8f;
+}
+
+.target-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.target-label {
+  color: #c2c9d4;
+  font-size: 14px;
+}
+
+.slider {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.slider::indicator {
+  background: #f27b50;
+}
+
+.slider::knob {
+  background: #ffffff;
+}
+
+.apply {
+  background: #2f6fde;
+  border-radius: 8px;
+}
+
+.apply:active {
+  background: #2157b3;
+}
+
+.apply:disabled {
+  background: #2a3140;
+  color: #6c7585;
+}

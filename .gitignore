@@ -1,2 +1,8 @@
 .vs
 x64
+node_modules/
+dist/
+.toolchain/
+packages/rippel/wasm/build/
+*.tsbuildinfo
+packages/rippel/wasm/*.tmp*

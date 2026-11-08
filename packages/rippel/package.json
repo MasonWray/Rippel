@@ -1,0 +1,89 @@
+{
+  "name": "rippel",
+  "version": "0.0.0",
+  "description": "Build embedded display UIs for microcontrollers with TSX and CSS, rendered by LVGL.",
+  "type": "module",
+  "bin": {
+    "rippel": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./client.d.ts"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
+    },
+    "./displays": {
+      "types": "./dist/displays.d.ts",
+      "default": "./dist/displays.js"
+    },
+    "./mcu": {
+      "types": "./dist/mcu.d.ts",
+      "default": "./dist/mcu.js"
+    },
+    "./renderer": {
+      "types": "./dist/runtime/renderer.d.ts",
+      "default": "./dist/runtime/renderer.js"
+    },
+    "./runtime/styles": {
+      "types": "./dist/runtime/styles.d.ts",
+      "default": "./dist/runtime/styles.js"
+    },
+    "./dev-shell": {
+      "types": "./dist/dev/shell.d.ts",
+      "default": "./dist/dev/shell.js"
+    },
+    "./vite": {
+      "types": "./dist/vite/plugin.d.ts",
+      "default": "./dist/vite/plugin.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
+    }
+  },
+  "files": [
+    "dist",
+    "wasm/rippel-lvgl.mjs",
+    "wasm/rippel-lvgl.wasm",
+    "wasm/rippel-lvgl.d.mts",
+    "client.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@babel/code-frame": "^7.29.7",
+    "@babel/core": "^7.29.13",
+    "color-name": "^2.1.1",
+    "jiti": "^2.7.0",
+    "lv_font_conv": "^1.5.3",
+    "postcss": "^8.5.32",
+    "solid-js": "^1.9.18",
+    "vite": "^8.3.6",
+    "vite-plugin-solid": "^2.11.15"
+  },
+  "devDependencies": {
+    "@types/babel__code-frame": "^7.27.0",
+    "@types/babel__core": "^7.20.5",
+    "@types/color-name": "^2.0.0",
+    "@types/node": "^26.6.6",
+    "typescript": "^6.0.3",
+    "vitest": "^5.1.0"
+  }
+}
