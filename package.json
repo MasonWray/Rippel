@@ -1,0 +1,16 @@
+{
+  "name": "rippel-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w rippel",
+    "build:wasm": "npm run build:wasm -w rippel",
+    "setup:emsdk": "node scripts/setup-emsdk.mjs",
+    "test": "npm test -w rippel",
+    "dev": "npm run build && npm run dev -w thermostat-example"
+  }
+}
