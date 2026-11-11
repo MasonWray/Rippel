@@ -15,6 +15,9 @@ export function Nav() {
       <button class="nav-btn" checked={tab() === "history"} disabled={busy()} onClick={() => setTab("history")}>
         {icons.list}
       </button>
+      <button class="nav-btn" checked={tab() === "settings"} disabled={busy()} onClick={() => setTab("settings")}>
+        {icons.settings}
+      </button>
       <view class="nav-spacer" />
       <bar class={waterLow() ? "water water-low" : "water"} min={0} max={100} value={waterPct()} />
       <label class={waterLow() ? "water-icon text-warn" : "water-icon"}>{icons.water}</label>

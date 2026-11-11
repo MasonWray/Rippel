@@ -66,6 +66,22 @@ lv_obj_t * rp_obj_create(rp_widget_t type, lv_obj_t * parent)
             obj = lv_image_create(parent);
             break;
 #endif
+#if LV_USE_SWITCH
+        case RP_WIDGET_SWITCH:
+            obj = lv_switch_create(parent);
+            break;
+#endif
+#if LV_USE_CHECKBOX
+        case RP_WIDGET_CHECKBOX:
+            obj = lv_checkbox_create(parent);
+            lv_checkbox_set_text(obj, "");
+            break;
+#endif
+#if LV_USE_DROPDOWN
+        case RP_WIDGET_DROPDOWN:
+            obj = lv_dropdown_create(parent);
+            break;
+#endif
         default:
             break;
     }
@@ -124,6 +140,15 @@ static void forward_event(lv_event_t * e)
 #endif
 #if LV_USE_ARC
     if(lv_obj_check_type(obj, &lv_arc_class)) value = lv_arc_get_value(obj);
+#endif
+#if LV_USE_SWITCH
+    if(lv_obj_check_type(obj, &lv_switch_class)) value = lv_obj_has_state(obj, LV_STATE_CHECKED);
+#endif
+#if LV_USE_CHECKBOX
+    if(lv_obj_check_type(obj, &lv_checkbox_class)) value = lv_obj_has_state(obj, LV_STATE_CHECKED);
+#endif
+#if LV_USE_DROPDOWN
+    if(lv_obj_check_type(obj, &lv_dropdown_class)) value = (int32_t)lv_dropdown_get_selected(obj);
 #endif
     event_handler(obj, ev, value);
 }
@@ -206,6 +231,26 @@ void rp_bar_set_range(lv_obj_t * obj, int32_t min, int32_t max)
 void rp_bar_set_value(lv_obj_t * obj, int32_t value)
 {
     lv_bar_set_value(obj, value, LV_ANIM_OFF);
+}
+#endif
+
+#if LV_USE_CHECKBOX
+void rp_checkbox_set_text(lv_obj_t * obj, const char * text)
+{
+    if(strcmp(lv_checkbox_get_text(obj), text) == 0) return;
+    lv_checkbox_set_text(obj, text);
+}
+#endif
+
+#if LV_USE_DROPDOWN
+void rp_dropdown_set_options(lv_obj_t * obj, const char * options)
+{
+    lv_dropdown_set_options(obj, options);
+}
+
+void rp_dropdown_set_selected(lv_obj_t * obj, int32_t index)
+{
+    lv_dropdown_set_selected(obj, (uint32_t)index);
 }
 #endif
 
@@ -298,13 +343,30 @@ void rp_style_set_transition(lv_style_t * style, const int32_t * props, int32_t 
     lv_style_set_transition(style, &t->dsc);
 }
 
+/* A dropdown's open list is a separate object, so ::items and ::selected are sent there. */
+static void route_list_styles(lv_obj_t ** obj, uint32_t * selector)
+{
+#if LV_USE_DROPDOWN
+    if(!lv_obj_check_type(*obj, &lv_dropdown_class)) return;
+    lv_part_t part = lv_obj_style_get_selector_part(*selector);
+    if(part != LV_PART_ITEMS && part != LV_PART_SELECTED) return;
+    *obj = lv_dropdown_get_list(*obj);
+    if(part == LV_PART_ITEMS) *selector = lv_obj_style_get_selector_state(*selector);
+#else
+    LV_UNUSED(obj);
+    LV_UNUSED(selector);
+#endif
+}
+
 void rp_obj_add_style(lv_obj_t * obj, lv_style_t * style, uint32_t selector)
 {
+    route_list_styles(&obj, &selector);
     lv_obj_add_style(obj, style, selector);
 }
 
 void rp_obj_remove_style(lv_obj_t * obj, lv_style_t * style, uint32_t selector)
 {
+    route_list_styles(&obj, &selector);
     lv_obj_remove_style(obj, style, selector);
 }
 
@@ -460,7 +522,9 @@ static const rp_const_t constants[] = {
 
     /* Images */
     C(LV_COLOR_FORMAT_RGB565), C(LV_COLOR_FORMAT_RGB565A8), C(LV_COLOR_FORMAT_ARGB8888),
+#if LV_USE_IMAGE
     C(LV_IMAGE_ALIGN_CENTER), C(LV_IMAGE_ALIGN_CONTAIN), C(LV_IMAGE_ALIGN_COVER), C(LV_IMAGE_ALIGN_STRETCH),
+#endif
 
     /* Easing */
     C(RP_PATH_LINEAR), C(RP_PATH_EASE_IN), C(RP_PATH_EASE_OUT), C(RP_PATH_EASE_IN_OUT),

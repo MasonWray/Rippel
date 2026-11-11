@@ -29,5 +29,11 @@
   {"name": "rate shot 2", "touch": [166, 294]},
   {"name": "save shot 2", "touch": [418, 285], "quiet": true},
   {"name": "shot 2 in history", "signal": "phase", "value": 0},
-  {"name": "back to brew", "touch": [22, 64]}
+  {"name": "back to brew", "touch": [22, 64]},
+  {"name": "open settings", "touch": [22, 152]},
+  {"name": "turn on eco mode", "touch": [434, 72]},
+  {"name": "untick the beep", "touch": [100, 136]},
+  {"name": "open the units dropdown", "touch": [396, 200]},
+  {"name": "pick Fahrenheit", "touch": [390, 270]},
+  {"name": "brew screen shows Fahrenheit and eco mode", "touch": [22, 64]}
 ]

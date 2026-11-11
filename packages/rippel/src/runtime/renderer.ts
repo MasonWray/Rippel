@@ -14,6 +14,9 @@ import { forgetNode, setClasses, setInlineStyle, type InlineStyle, type StyledNo
 
 type Handler = (value?: number) => void;
 
+/** Widgets whose only value event is onChange, fired when the user changes them. */
+const CHANGE_WIDGETS = ["switch", "checkbox", "dropdown"];
+
 export class TextNode {
   readonly kind = "text";
   parent: ElementNode | undefined;
@@ -88,6 +91,8 @@ function syncText(node: ElementNode) {
   const text = texts.map((t) => t.text).join("");
   if (node.type === "label") {
     lv.labelSetText(node.obj, text);
+  } else if (node.type === "checkbox") {
+    lv.checkboxSetText(node.obj, text);
   } else if (node.type === "button") {
     if (!node.implicitLabel && texts.length) {
       node.implicitLabel = lv.objCreate("label", node.obj);
@@ -119,7 +124,11 @@ function dispatchEvent(obj: Ptr, event: number, value: number) {
       if (node.type === "slider" || node.type === "arc") h.onChange?.(value);
       break;
     case EVENT.longPress: h.onLongPress?.(); break;
-    case EVENT.valueChanged: h.onInput?.(value); break;
+    case EVENT.valueChanged:
+      if (node.type === "switch" || node.type === "checkbox") (h.onChange as ((on: boolean) => void) | undefined)?.(value !== 0);
+      else if (node.type === "dropdown") h.onChange?.(value);
+      else h.onInput?.(value);
+      break;
     case EVENT.focus: h.onFocus?.(); break;
     case EVENT.blur: h.onBlur?.(); break;
   }
@@ -166,7 +175,12 @@ function setProperty(node: RNode, name: string, value: unknown): void {
   const lv = lvgl();
 
   if (name.startsWith("on")) {
-    const allowed = node.type === "slider" || node.type === "arc" ? [...COMMON_EVENTS, ...VALUE_EVENTS] : COMMON_EVENTS;
+    const allowed =
+      node.type === "slider" || node.type === "arc"
+        ? [...COMMON_EVENTS, ...VALUE_EVENTS]
+        : CHANGE_WIDGETS.includes(node.type)
+          ? [...COMMON_EVENTS, "onChange"]
+          : COMMON_EVENTS;
     if (!allowed.includes(name)) throw new Error(`<${node.type}> has no "${name}" event`);
     if (value !== undefined && typeof value !== "function") {
       throw new Error(`"${name}" on <${node.type}> must be a function`);
@@ -212,6 +226,16 @@ function setProperty(node: RNode, name: string, value: unknown): void {
         ranged.value(node.obj, Math.round(Number(value ?? 0)));
         return;
     }
+  }
+
+  if (node.type === "dropdown" && name === "options") {
+    lv.dropdownSetOptions(node.obj, (value as string[]).join("\n"));
+    return;
+  }
+
+  if (node.type === "dropdown" && name === "selected") {
+    lv.dropdownSetSelected(node.obj, Math.round(Number(value ?? 0)));
+    return;
   }
 
   if (node.type === "image" && name === "src") {

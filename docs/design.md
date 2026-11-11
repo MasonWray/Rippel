@@ -50,7 +50,7 @@ Elements use LVGL widget names, not HTML names, so nobody expects arbitrary HTML
 
 Touches pass through a plain `view` to whatever is behind it, unless it has an event handler or the `scroll` prop. A `view` doesn't scroll unless it has `scroll`.
 
-Elements so far: `view`, `label`, `button`, `slider`, `arc`, `bar`, `image`. Later: `switch`, `checkbox`, `dropdown`, `textarea`, `chart`, `tabview`, and so on.
+Elements so far: `view`, `label`, `button`, `slider`, `arc`, `bar`, `image`, `switch`, `checkbox`, `dropdown`. Later: `textarea`, `chart`, `tabview`, and so on.
 
 ### Reactivity
 

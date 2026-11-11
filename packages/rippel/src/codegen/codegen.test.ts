@@ -121,7 +121,7 @@ describe("rippel build", () => {
       "src/app.css": `.a { opacity: 1 } .b { opacity: 0.5 }`,
     });
     expect(ui).toContain("const int32_t next = sig_online ? 0 : 1;");
-    expect(ui).toContain("lv_obj_remove_style(o_view, &st_1_b, LV_PART_MAIN);");
+    expect(ui).toContain("rp_obj_remove_style(o_view, &st_1_b, LV_PART_MAIN);");
   });
 
   it("applies only the @media rules that match the configured display", async () => {
@@ -164,6 +164,34 @@ describe("rippel build", () => {
       message: expect.stringMatching(/<For> needs a constant list, or the items of a list made with createList/),
     });
     await expect(build(app(`const [items] = createSignal([1]); return <label>{items()}</label>;`))).rejects.toBeInstanceOf(CodegenError);
+  });
+
+  describe("switch, checkbox and dropdown", () => {
+    it("binds a switch and passes a boolean to its handler", async () => {
+      const { ui, conf } = await build(app(`const [on, setOn] = createSignal(false); return <switch checked={on()} onChange={setOn} />;`));
+      expect(ui).toContain("rp_obj_create(RP_WIDGET_SWITCH, root)");
+      expect(ui).toContain("const bool value = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);");
+      expect(ui).toContain("set_on(value);");
+      expect(ui).toContain("LV_EVENT_VALUE_CHANGED");
+      expect(conf).toContain("#define LV_USE_SWITCH 1");
+    });
+
+    it("uses a checkbox's children as its label", async () => {
+      const { ui } = await build(app(`return <checkbox>Beep at {temperature()}</checkbox>;`));
+      expect(ui).toMatch(/rp_checkbox_set_text\(o_checkbox, text\);/);
+    });
+
+    it("sets dropdown options and passes the chosen index", async () => {
+      const { ui, conf } = await build(app(`const [i, setI] = createSignal(1); return <dropdown options={["A", "B"]} selected={i()} onChange={setI} />;`));
+      expect(ui).toContain('rp_dropdown_set_options(o_dropdown, "A\\nB");');
+      expect(ui).toContain("rp_dropdown_set_selected(o_dropdown, sig_i);");
+      expect(ui).toContain("const int32_t value = (int32_t)lv_dropdown_get_selected(lv_event_get_target(e));");
+      expect(conf).toContain("#define LV_USE_DROPDOWN 1");
+    });
+
+    it("needs dropdown options at build time", async () => {
+      await expect(build(app(`return <dropdown options={[name()]} />;`))).rejects.toThrow(/known at build time/);
+    });
   });
 
   describe("<image>", () => {

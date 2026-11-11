@@ -40,6 +40,9 @@ typedef enum {
     RP_WIDGET_ARC = 4,
     RP_WIDGET_BAR = 5,
     RP_WIDGET_IMAGE = 6,
+    RP_WIDGET_SWITCH = 7,
+    RP_WIDGET_CHECKBOX = 8,
+    RP_WIDGET_DROPDOWN = 9,
 } rp_widget_t;
 
 /* Events forwarded to the platform. The numbering is part of the bridge interface. */
@@ -63,7 +66,8 @@ typedef enum {
     RP_PATH_BOUNCE = 5,
 } rp_path_t;
 
-/* `value` carries the widget's current value for value-carrying widgets (slider, arc), else 0. */
+/* `value` carries the widget's current value for widgets that have one: a number for sliders, arcs and
+ * dropdowns, and 0 or 1 for switches and checkboxes. It's 0 for everything else. */
 typedef void (*rp_event_handler_t)(lv_obj_t * obj, rp_event_t event, int32_t value);
 
 void rp_set_event_handler(rp_event_handler_t handler);
@@ -94,6 +98,10 @@ RP_API void rp_arc_set_value(lv_obj_t * obj, int32_t value);
 RP_API void rp_arc_set_readonly(lv_obj_t * obj, bool readonly);
 RP_API void rp_bar_set_range(lv_obj_t * obj, int32_t min, int32_t max);
 RP_API void rp_bar_set_value(lv_obj_t * obj, int32_t value);
+RP_API void rp_checkbox_set_text(lv_obj_t * obj, const char * text);
+/* `options` has one option per line. */
+RP_API void rp_dropdown_set_options(lv_obj_t * obj, const char * options);
+RP_API void rp_dropdown_set_selected(lv_obj_t * obj, int32_t index);
 RP_API void rp_image_set_src(lv_obj_t * obj, const void * src);
 /* `fit` is an lv_image_align_t: how the image fills the object when their sizes differ. */
 RP_API void rp_image_set_fit(lv_obj_t * obj, int32_t fit);

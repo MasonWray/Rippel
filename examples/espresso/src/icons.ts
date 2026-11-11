@@ -2,6 +2,7 @@
 export const icons = {
   home: "",
   list: "",
+  settings: "\uF013",
   water: "",
   play: "",
   stop: "",

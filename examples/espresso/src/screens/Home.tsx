@@ -2,20 +2,23 @@ import { For, Show } from "rippel";
 import { Gauge } from "../components/Gauge";
 import { Param } from "../components/Param";
 import { RecipeCard } from "../components/RecipeCard";
-import { boilerC, setBoilerTarget } from "../firmware.contract";
+import { boilerC } from "../firmware.contract";
 import { icons } from "../icons";
 import { RECIPES } from "../recipes";
 import {
   accent,
+  applyBoilerTarget,
   beginShot,
   boilerReady,
   canBrew,
   doseTenths,
+  ecoMode,
   ratioTenths,
   recipe,
   setDoseTenths,
   setRatioTenths,
   setTempC,
+  showTemp,
   targetYieldG,
   tempC,
   waterLow,
@@ -23,8 +26,9 @@ import {
 
 export function Home() {
   const status = () => {
+    if (ecoMode()) return "Eco mode is on";
     if (waterLow()) return "Refill water";
-    return boilerReady() ? "Ready to brew" : `Heating to ${tempC()}°`;
+    return boilerReady() ? "Ready to brew" : `Heating to ${showTemp(tempC())}°`;
   };
 
   return (
@@ -36,7 +40,7 @@ export function Home() {
       <view class="home-main">
         <view class="col-brew">
           <Gauge size="lg" accent={accent()} min={60} max={100} value={Math.round(boilerC())}>
-            <label class="readout-md">{Math.round(boilerC())}°</label>
+            <label class="readout-md">{showTemp(boilerC())}°</label>
             <label class="muted">Boiler</label>
           </Gauge>
           <view class="status-row">
@@ -71,13 +75,13 @@ export function Home() {
           />
           <Param
             name="Temperature"
-            display={`${tempC()}°`}
+            display={`${showTemp(tempC())}°`}
             accent={accent()}
             min={88}
             max={98}
             value={tempC()}
             onInput={setTempC}
-            onChange={(celsius) => setBoilerTarget({ celsius })}
+            onChange={applyBoilerTarget}
           />
           <view class="yield">
             <label class="muted">Yield in the cup</label>
