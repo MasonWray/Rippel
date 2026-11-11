@@ -39,6 +39,7 @@ typedef enum {
     RP_WIDGET_SLIDER = 3,
     RP_WIDGET_ARC = 4,
     RP_WIDGET_BAR = 5,
+    RP_WIDGET_IMAGE = 6,
 } rp_widget_t;
 
 /* Events forwarded to the platform. The numbering is part of the bridge interface. */
@@ -93,6 +94,12 @@ RP_API void rp_arc_set_value(lv_obj_t * obj, int32_t value);
 RP_API void rp_arc_set_readonly(lv_obj_t * obj, bool readonly);
 RP_API void rp_bar_set_range(lv_obj_t * obj, int32_t min, int32_t max);
 RP_API void rp_bar_set_value(lv_obj_t * obj, int32_t value);
+RP_API void rp_image_set_src(lv_obj_t * obj, const void * src);
+/* `fit` is an lv_image_align_t: how the image fills the object when their sizes differ. */
+RP_API void rp_image_set_fit(lv_obj_t * obj, int32_t fit);
+/* Wraps pixel data the caller keeps alive. Used by the simulator, where images load at runtime. */
+RP_API const lv_image_dsc_t * rp_image_dsc_create(int32_t width, int32_t height, int32_t format, int32_t stride,
+                                                  const uint8_t * data, uint32_t size);
 
 /* Shared styles (CSS classes) */
 RP_API lv_style_t * rp_style_create(void);

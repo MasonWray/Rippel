@@ -24,7 +24,10 @@ export function LiveShot() {
             )}
           </For>
         </view>
-        <label class={`recipe-title text-${accent()}`}>{recipe().name}</label>
+        <view class="title-row">
+          <image class={`tint-${accent()}`} src={recipe().icon} />
+          <label class={`recipe-title text-${accent()}`}>{recipe().name}</label>
+        </view>
       </view>
 
       <view class="live-mid">

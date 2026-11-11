@@ -14,6 +14,18 @@ export interface RippelNode {
 
 export type InlineStyle = Record<string, string | number | undefined>;
 
+/** A converted image, from importing a .png file. */
+export interface ImageAsset {
+  readonly kind: "image";
+  readonly width: number;
+  readonly height: number;
+  readonly stride: number;
+  /** Name of an LVGL color format constant. */
+  readonly format: string;
+  /** The pixels, base64 encoded. */
+  readonly data: string;
+}
+
 interface CommonProps {
   /** Space-separated CSS class names. */
   class?: string;
@@ -82,6 +94,12 @@ export namespace JSX {
       children?: Element;
       onInput?: (value: number) => void;
       onChange?: (value: number) => void;
+    };
+    /** A picture from an imported .png file. Sized to the image unless you set a width and height. */
+    image: CommonProps & {
+      src: ImageAsset;
+      /** How the image fills the element when their sizes differ. Defaults to "none", which centers it unscaled. */
+      fit?: "none" | "contain" | "cover" | "fill";
     };
     /** A progress bar. Style the fill with `::indicator`. */
     bar: CommonProps & {

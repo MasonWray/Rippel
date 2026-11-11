@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { PNG } from "pngjs";
 import { resolveConfig } from "../node/load-config.js";
 import { buildProject } from "./build.js";
 import { CodegenError } from "./compile.js";
@@ -23,10 +24,10 @@ const CONTRACT = `
 `;
 
 /** Writes a project to a temp folder, builds it and returns its generated files. */
-async function build(files: Record<string, string>, out = "out") {
+async function build(files: Record<string, string | Buffer>, out = "out") {
   const root = mkdtempSync(join(tmpdir(), "rippel-codegen-"));
   roots.push(root);
-  const all: Record<string, string> = { "src/firmware.contract.ts": CONTRACT, ...files };
+  const all: Record<string, string | Buffer> = { "src/firmware.contract.ts": CONTRACT, ...files };
   for (const [path, text] of Object.entries(all)) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), text);
@@ -163,6 +164,58 @@ describe("rippel build", () => {
       message: expect.stringMatching(/<For> needs a constant list, or the items of a list made with createList/),
     });
     await expect(build(app(`const [items] = createSignal([1]); return <label>{items()}</label>;`))).rejects.toBeInstanceOf(CodegenError);
+  });
+
+  describe("<image>", () => {
+    const png = (alpha: number) => {
+      const image = new PNG({ width: 2, height: 1 });
+      image.data.set([255, 0, 0, alpha, 0, 0, 255, alpha]);
+      return PNG.sync.write(image);
+    };
+
+    it("embeds an imported PNG as a C image", async () => {
+      const { ui, conf, read, result } = await build({
+        ...app(`return <image src={logo} fit="contain" />;`, `import logo from "./logo.png";`),
+        "src/logo.png": png(128),
+      });
+      expect(ui).toContain("LV_IMAGE_DECLARE(rp_img_logo);");
+      expect(ui).toContain("rp_image_set_src(o_image, &rp_img_logo);");
+      expect(ui).toContain("rp_image_set_fit(o_image, LV_IMAGE_ALIGN_CONTAIN);");
+      expect(conf).toContain("#define LV_USE_IMAGE 1");
+      // Two RGB565 pixels, then two alpha bytes.
+      expect(read("rp_img_logo.c")).toContain("0x00, 0xf8, 0x1f, 0x00, 0x80, 0x80,");
+      expect(read("rp_img_logo.c")).toContain(".cf = LV_COLOR_FORMAT_RGB565A8, .w = 2, .h = 1, .stride = 4");
+      expect(result.images[0].bytes).toBe(6);
+    });
+
+    it("leaves out the alpha plane for opaque images", async () => {
+      const { read } = await build({ ...app(`return <image src={logo} />;`, `import logo from "./logo.png";`), "src/logo.png": png(255) });
+      expect(read("rp_img_logo.c")).toContain(".cf = LV_COLOR_FORMAT_RGB565,");
+    });
+
+    it("picks an image at runtime from a condition or a table", async () => {
+      const { ui } = await build({
+        ...app(
+          `const [i] = createSignal(0);
+           return <view><image src={online() ? a : b} /><image src={ROWS[i()].icon} /></view>;`,
+          `import a from "./a.png"; import b from "./b.png"; const ROWS = [{ icon: a }, { icon: b }];`,
+        ),
+        "src/a.png": png(255),
+        "src/b.png": png(128),
+      });
+      expect(ui).toContain("rp_image_set_src(o_image, (sig_online ? &rp_img_a : &rp_img_b));");
+      expect(ui).toContain("static const void * const lut_0[] = { &rp_img_a, &rp_img_b };");
+      expect(ui).toContain("rp_image_set_src(o_image_2, lut_0[sig_i]);");
+    });
+
+    it("only compiles the images the UI uses", async () => {
+      const { result } = await build({ ...app(`return <view />;`, `import logo from "./logo.png";`), "src/logo.png": png(255) });
+      expect(result.images).toEqual([]);
+    });
+
+    it("rejects other image formats", async () => {
+      await expect(build({ ...app(`return <view />;`, `import pic from "./pic.jpg";`), "src/pic.jpg": "x" })).rejects.toThrow(/Only .png/);
+    });
   });
 
   describe("createList", () => {

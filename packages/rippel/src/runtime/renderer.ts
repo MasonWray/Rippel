@@ -7,6 +7,7 @@
  * <label> they're in, or of an implicit label inside a <button>.
  */
 import { createRenderer } from "solid-js/universal";
+import type { ImageAsset } from "../jsx-runtime.js";
 import { EVENT, WIDGET, type Ptr, type WidgetType } from "./lvgl.js";
 import { lvgl } from "./host.js";
 import { forgetNode, setClasses, setInlineStyle, type InlineStyle, type StyledNode } from "./styles.js";
@@ -127,6 +128,28 @@ function dispatchEvent(obj: Ptr, event: number, value: number) {
 const COMMON_EVENTS = ["onClick", "onPress", "onRelease", "onLongPress", "onFocus", "onBlur"];
 const VALUE_EVENTS = ["onInput", "onChange"];
 
+const IMAGE_FIT: Record<string, string> = {
+  none: "LV_IMAGE_ALIGN_CENTER",
+  contain: "LV_IMAGE_ALIGN_CONTAIN",
+  cover: "LV_IMAGE_ALIGN_COVER",
+  fill: "LV_IMAGE_ALIGN_STRETCH",
+};
+
+/** Each imported image is copied into LVGL's memory once. */
+const loadedImages = new WeakMap<ImageAsset, Ptr>();
+
+function imagePointer(asset: ImageAsset): Ptr {
+  if (asset?.kind !== "image") throw new Error("<image> needs `src` set to an imported .png file");
+  let ptr = loadedImages.get(asset);
+  if (ptr === undefined) {
+    const lv = lvgl();
+    const pixels = Uint8Array.from(atob(asset.data), (c) => c.charCodeAt(0));
+    ptr = lv.imageCreate(asset.width, asset.height, lv.constant(asset.format), asset.stride, pixels);
+    loadedImages.set(asset, ptr);
+  }
+  return ptr;
+}
+
 /** Setters for widgets that have a range and a value. */
 function rangedSetters(type: WidgetType | "root") {
   const lv = lvgl();
@@ -189,6 +212,18 @@ function setProperty(node: RNode, name: string, value: unknown): void {
         ranged.value(node.obj, Math.round(Number(value ?? 0)));
         return;
     }
+  }
+
+  if (node.type === "image" && name === "src") {
+    lv.imageSetSrc(node.obj, imagePointer(value as ImageAsset));
+    return;
+  }
+
+  if (node.type === "image" && name === "fit") {
+    const fit = IMAGE_FIT[String(value ?? "none")];
+    if (!fit) throw new Error(`Unknown fit "${String(value)}". Use ${Object.keys(IMAGE_FIT).join(", ")}.`);
+    lv.imageSetFit(node.obj, lv.constant(fit));
+    return;
   }
 
   if (node.type === "arc" && name === "readonly") {

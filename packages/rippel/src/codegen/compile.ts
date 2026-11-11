@@ -10,7 +10,7 @@
  * Anything outside the supported subset is a CodegenError with a location.
  */
 import { readFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, extname, resolve } from "node:path";
 import { parseSync, type types as t } from "@babel/core";
 import { translateDeclarations, inlineDeclarations } from "../style/translate.js";
 import type { StyleContext, StyleDecl } from "../style/ir.js";
@@ -72,7 +72,7 @@ export interface Handler {
 /** The C expression that reads a signal. */
 export const sigRef = (signal: Signal) => signal.code ?? `sig_${signal.name}`;
 
-export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar";
+export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar" | "image";
 
 export interface Obj {
   name: string;
@@ -101,6 +101,8 @@ export interface UiProgram {
   /** Style rules are referenced by class name through this callback at emit time. */
   usedWidgets: Set<Widget>;
   usedFonts: Set<string>;
+  /** Image files the UI uses: absolute path -> C symbol. */
+  images: Map<string, string>;
   warnings: string[];
   tables: { key: string; name: string; ctype: string; values: string[] }[];
   lists: { storage: string; capacity: number; fields: string[]; rows: string[]; nextId: number }[];
@@ -233,7 +235,13 @@ const CONTRACT_TYPES: Record<string, ValueInfo> = {
 
 const LATER = "isn't supported by `rippel build` yet";
 const LATER_MANY = "aren't supported by `rippel build` yet";
-const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar" };
+const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar", image: "image" };
+const IMAGE_FIT: Record<string, string> = {
+  none: "LV_IMAGE_ALIGN_CENTER",
+  contain: "LV_IMAGE_ALIGN_CONTAIN",
+  cover: "LV_IMAGE_ALIGN_COVER",
+  fill: "LV_IMAGE_ALIGN_STRETCH",
+};
 const WIDGET_ENUM: Record<Widget, string> = {
   view: "RP_WIDGET_VIEW",
   label: "RP_WIDGET_LABEL",
@@ -241,6 +249,7 @@ const WIDGET_ENUM: Record<Widget, string> = {
   slider: "RP_WIDGET_SLIDER",
   arc: "RP_WIDGET_ARC",
   bar: "RP_WIDGET_BAR",
+  image: "RP_WIDGET_IMAGE",
 };
 export const widgetEnum = (w: Widget) => WIDGET_ENUM[w];
 
@@ -448,6 +457,7 @@ class Compiler {
     init: [],
     usedWidgets: new Set(),
     usedFonts: new Set(),
+    images: new Map(),
     warnings: [],
     tables: [],
     lists: [],
@@ -626,6 +636,16 @@ class Compiler {
     if (statement.importKind === "type") return;
     const source = statement.source.value;
     if (source.endsWith(".css")) return;
+    if (/\.(jpe?g|gif|webp|bmp|svg)$/i.test(source)) this.fail(statement, module, "Only .png images are supported for now");
+    if (/\.png$/i.test(source)) {
+      const file = resolve(dirname(module.file), source);
+      if (!existsSync(file)) this.fail(statement, module, `Can't find "${source}"`);
+      for (const spec of statement.specifiers) {
+        if (spec.type !== "ImportDefaultSpecifier") this.fail(spec, module, "Import an image as a default import");
+        module.scope.set(spec.local.name, { k: "const", value: { __image: file } });
+      }
+      return;
+    }
     if (source === "rippel" || source === "rippel/contract") {
       for (const spec of statement.specifiers) {
         if (spec.type === "ImportSpecifier" && spec.importKind !== "type" && spec.imported.type === "Identifier") {
@@ -1413,21 +1433,61 @@ class Compiler {
     }
   }
 
+  private lookupTable(ctype: string, items: string[]): string {
+    const key = `${ctype}:${items.join(",")}`;
+    let found = this.program.tables.find((x) => x.key === key);
+    if (!found) {
+      found = { key, name: `lut_${this.program.tables.length}`, ctype, values: items };
+      this.program.tables.push(found);
+    }
+    return found.name;
+  }
+
+  private imageSymbol(value: ConstValue): string | undefined {
+    if (typeof value !== "object" || value === null || value instanceof Opaque || Array.isArray(value)) return undefined;
+    const file = value.__image;
+    if (typeof file !== "string") return undefined;
+    let symbol = this.program.images.get(file);
+    if (!symbol) {
+      const base = `rp_img_${basename(file, extname(file)).replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+      symbol = this.unique(base);
+      this.program.images.set(file, symbol);
+    }
+    return symbol;
+  }
+
+  /** A C expression for an <image src>: one image, or one picked at runtime. */
+  private imageSource(node: t.Node, scope: Scope, module: Module): { code: string; deps: Set<Signal> } {
+    const n = unwrap(node);
+    const folded = this.evalSplit(n, scope, module);
+    if (folded?.k === "const") {
+      const symbol = this.imageSymbol(folded.value);
+      if (symbol) return { code: `&${symbol}`, deps: noDeps() };
+    }
+    if (folded?.k === "split") {
+      const symbols = folded.values.map((v) => this.imageSymbol(v));
+      if (symbols.every(Boolean)) {
+        this.collect?.add(folded.signal);
+        const table = this.lookupTable("void * const", symbols.map((s) => `&${s}`));
+        return { code: `${table}[${sigRef(folded.signal)}]`, deps: new Set([folded.signal]) };
+      }
+    }
+    if (n.type === "ConditionalExpression") {
+      const c = this.expr(n.test, scope, module);
+      const a = this.imageSource(n.consequent, scope, module);
+      const b = this.imageSource(n.alternate, scope, module);
+      return { code: `(${this.truthy(c, n.test, module)} ? ${a.code} : ${b.code})`, deps: new Set([...c.deps, ...a.deps, ...b.deps]) };
+    }
+    this.fail(n, module, "`src` must be an imported .png file");
+  }
+
   /** A value picked from a constant table by a signal becomes a lookup table in C. */
   private splitExpr(folded: Extract<Folded, { k: "split" }>, node: t.Node, module: Module): Expr {
     const { signal, values } = folded;
     this.collect?.add(signal);
     const deps = new Set([signal]);
     const index = sigRef(signal);
-    const table = (ctype: string, items: string[]) => {
-      const key = `${ctype}:${items.join(",")}`;
-      let found = this.program.tables.find((x) => x.key === key);
-      if (!found) {
-        found = { key, name: `lut_${this.program.tables.length}`, ctype, values: items };
-        this.program.tables.push(found);
-      }
-      return `${found.name}[${index}]`;
-    };
+    const table = (ctype: string, items: string[]) => `${this.lookupTable(ctype, items)}[${index}]`;
 
     if (values.every((v) => typeof v === "string")) {
       const strings = values as string[];
@@ -2417,6 +2477,19 @@ class Compiler {
           emitRange();
           const e = this.number(value, scope, module);
           this.bind("value", e.deps, obj, [`rp_${widget}_set_value(${obj.name}, ${e.code});`]);
+          break;
+        }
+        case "src": {
+          if (widget !== "image" || !value) this.fail(node, module, `<${widget}> has no "src" prop`);
+          const src = this.imageSource(value, scope, module);
+          this.bind("src", src.deps, obj, [`rp_image_set_src(${obj.name}, ${src.code});`]);
+          break;
+        }
+        case "fit": {
+          const known = widget === "image" && value ? this.tryConst(value, scope, module) : undefined;
+          const fit = typeof known?.value === "string" ? IMAGE_FIT[known.value] : undefined;
+          if (!fit) this.fail(node, module, `"fit" must be one of ${Object.keys(IMAGE_FIT).join(", ")}, and known at build time`);
+          this.line(`rp_image_set_fit(${obj.name}, ${fit});`);
           break;
         }
         case "readonly": {

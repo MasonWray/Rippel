@@ -61,6 +61,11 @@ lv_obj_t * rp_obj_create(rp_widget_t type, lv_obj_t * parent)
             obj = lv_bar_create(parent);
             break;
 #endif
+#if LV_USE_IMAGE
+        case RP_WIDGET_IMAGE:
+            obj = lv_image_create(parent);
+            break;
+#endif
         default:
             break;
     }
@@ -203,6 +208,32 @@ void rp_bar_set_value(lv_obj_t * obj, int32_t value)
     lv_bar_set_value(obj, value, LV_ANIM_OFF);
 }
 #endif
+
+#if LV_USE_IMAGE
+void rp_image_set_src(lv_obj_t * obj, const void * src)
+{
+    lv_image_set_src(obj, src);
+}
+
+void rp_image_set_fit(lv_obj_t * obj, int32_t fit)
+{
+    lv_image_set_inner_align(obj, (lv_image_align_t)fit);
+}
+#endif
+
+const lv_image_dsc_t * rp_image_dsc_create(int32_t width, int32_t height, int32_t format, int32_t stride,
+                                           const uint8_t * data, uint32_t size)
+{
+    lv_image_dsc_t * dsc = lv_malloc_zeroed(sizeof(lv_image_dsc_t));
+    dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
+    dsc->header.cf = (uint32_t)format;
+    dsc->header.w = (uint32_t)width;
+    dsc->header.h = (uint32_t)height;
+    dsc->header.stride = (uint32_t)stride;
+    dsc->data_size = size;
+    dsc->data = data;
+    return dsc;
+}
 
 /* ---------- Styles ---------- */
 
@@ -393,6 +424,7 @@ static const rp_const_t constants[] = {
     C(LV_STYLE_TEXT_ALIGN), C(LV_STYLE_TEXT_LETTER_SPACE), C(LV_STYLE_TEXT_LINE_SPACE), C(LV_STYLE_TEXT_DECOR),
     C(LV_STYLE_ARC_COLOR), C(LV_STYLE_ARC_OPA), C(LV_STYLE_ARC_WIDTH), C(LV_STYLE_ARC_ROUNDED),
     C(LV_STYLE_OPA), C(LV_STYLE_RECOLOR_OPA),
+    C(LV_STYLE_IMAGE_RECOLOR), C(LV_STYLE_IMAGE_RECOLOR_OPA),
     C(LV_STYLE_TRANSLATE_X), C(LV_STYLE_TRANSLATE_Y),
     C(LV_STYLE_LAYOUT),
     C(LV_STYLE_FLEX_FLOW), C(LV_STYLE_FLEX_MAIN_PLACE), C(LV_STYLE_FLEX_CROSS_PLACE),
@@ -425,6 +457,10 @@ static const rp_const_t constants[] = {
     /* Borders */
     C(LV_BORDER_SIDE_NONE), C(LV_BORDER_SIDE_BOTTOM), C(LV_BORDER_SIDE_TOP),
     C(LV_BORDER_SIDE_LEFT), C(LV_BORDER_SIDE_RIGHT), C(LV_BORDER_SIDE_FULL),
+
+    /* Images */
+    C(LV_COLOR_FORMAT_RGB565), C(LV_COLOR_FORMAT_RGB565A8), C(LV_COLOR_FORMAT_ARGB8888),
+    C(LV_IMAGE_ALIGN_CENTER), C(LV_IMAGE_ALIGN_CONTAIN), C(LV_IMAGE_ALIGN_COVER), C(LV_IMAGE_ALIGN_STRETCH),
 
     /* Easing */
     C(RP_PATH_LINEAR), C(RP_PATH_EASE_IN), C(RP_PATH_EASE_OUT), C(RP_PATH_EASE_IN_OUT),

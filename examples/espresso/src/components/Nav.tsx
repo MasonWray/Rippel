@@ -1,4 +1,5 @@
 import { waterPct, phase } from "../firmware.contract";
+import logo from "../assets/logo.png";
 import { icons } from "../icons";
 import { PHASE, setTab, tab, waterLow } from "../state";
 
@@ -7,6 +8,7 @@ export function Nav() {
 
   return (
     <view class="nav">
+      <image src={logo} />
       <button class="nav-btn" checked={tab() === "brew"} disabled={busy()} onClick={() => setTab("brew")}>
         {icons.home}
       </button>

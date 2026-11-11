@@ -1,3 +1,9 @@
+import type { ImageAsset } from "rippel";
+import bloomIcon from "./assets/bloom.png";
+import classicIcon from "./assets/classic.png";
+import leverIcon from "./assets/lever.png";
+import turboIcon from "./assets/turbo.png";
+
 export type Accent = "amber" | "teal" | "rose" | "violet";
 
 /** One stretch of a pressure profile. Pressure moves from `from` to `to` bar until `until` seconds. */
@@ -11,6 +17,7 @@ export interface Segment {
 
 export interface Recipe {
   name: string;
+  icon: ImageAsset;
   accent: Accent;
   doseTenths: number;
   ratioTenths: number;
@@ -22,6 +29,7 @@ export interface Recipe {
 export const RECIPES: Recipe[] = [
   {
     name: "Classic",
+    icon: classicIcon,
     accent: "amber",
     doseTenths: 180,
     ratioTenths: 20,
@@ -35,6 +43,7 @@ export const RECIPES: Recipe[] = [
   },
   {
     name: "Bloom",
+    icon: bloomIcon,
     accent: "teal",
     doseTenths: 180,
     ratioTenths: 25,
@@ -49,6 +58,7 @@ export const RECIPES: Recipe[] = [
   },
   {
     name: "Lever",
+    icon: leverIcon,
     accent: "rose",
     doseTenths: 170,
     ratioTenths: 22,
@@ -62,6 +72,7 @@ export const RECIPES: Recipe[] = [
   },
   {
     name: "Turbo",
+    icon: turboIcon,
     accent: "violet",
     doseTenths: 150,
     ratioTenths: 30,

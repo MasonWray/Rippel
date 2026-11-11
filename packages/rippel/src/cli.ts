@@ -94,6 +94,10 @@ async function build(root: string, out: string | undefined, entry: string | unde
     const result = await buildProject(config, out);
     for (const warning of result.warnings) console.log(`Warning: ${warning}`);
     console.log(`Generated ${result.files.length} files in ${relative(root, result.outDir) || "."}`);
+    if (result.images.length) {
+      const total = result.images.reduce((sum, image) => sum + image.bytes, 0);
+      console.log(`Images: ${result.images.length}, using ${(total / 1024).toFixed(1)} KB of flash`);
+    }
     return 0;
   } catch (err) {
     if (err instanceof CodegenError) {
