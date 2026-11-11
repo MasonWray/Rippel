@@ -65,14 +65,14 @@ export interface Bind {
 export interface Handler {
   name: string;
   body: string[];
-  /** The widget's current value is read into `value`. */
-  valueGetter?: string;
+  /** C declaration that reads the widget's current value into `value`. */
+  valueDecl?: string;
 }
 
 /** The C expression that reads a signal. */
 export const sigRef = (signal: Signal) => signal.code ?? `sig_${signal.name}`;
 
-export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar" | "image";
+export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar" | "image" | "switch" | "checkbox" | "dropdown";
 
 export interface Obj {
   name: string;
@@ -235,7 +235,7 @@ const CONTRACT_TYPES: Record<string, ValueInfo> = {
 
 const LATER = "isn't supported by `rippel build` yet";
 const LATER_MANY = "aren't supported by `rippel build` yet";
-const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar", image: "image" };
+const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar", image: "image", switch: "switch", checkbox: "checkbox", dropdown: "dropdown" };
 const IMAGE_FIT: Record<string, string> = {
   none: "LV_IMAGE_ALIGN_CENTER",
   contain: "LV_IMAGE_ALIGN_CONTAIN",
@@ -250,6 +250,9 @@ const WIDGET_ENUM: Record<Widget, string> = {
   arc: "RP_WIDGET_ARC",
   bar: "RP_WIDGET_BAR",
   image: "RP_WIDGET_IMAGE",
+  switch: "RP_WIDGET_SWITCH",
+  checkbox: "RP_WIDGET_CHECKBOX",
+  dropdown: "RP_WIDGET_DROPDOWN",
 };
 export const widgetEnum = (w: Widget) => WIDGET_ENUM[w];
 
@@ -376,21 +379,21 @@ function appendStr(node: StrNode, indent: string): string[] {
 }
 
 /** Statements that set a label to a string expression. */
-function setText(obj: string, node: StrNode): string[] {
+function setText(obj: string, node: StrNode, setter = "rp_label_set_text"): string[] {
   const parts = flattenStr(node);
   if (parts.every((p) => p.k === "lit")) {
-    return [`rp_label_set_text(${obj}, ${cString(parts.map((p) => (p as { v: string }).v).join(""))});`];
+    return [`${setter}(${obj}, ${cString(parts.map((p) => (p as { v: string }).v).join(""))});`];
   }
-  if (parts.length === 1 && isPlain(parts[0])) return [`rp_label_set_text(${obj}, ${plainCode(parts[0])});`];
+  if (parts.length === 1 && isPlain(parts[0])) return [`${setter}(${obj}, ${plainCode(parts[0])});`];
 
   const size = strBound(node) + 1;
   if (parts.every((p) => strPiece(p))) {
     const pieces = parts.map((p) => strPiece(p)!);
     const format = pieces.map((p) => p.format).join("");
     const args = pieces.flatMap((p) => p.args);
-    return [`char text[${size}];`, `snprintf(text, sizeof(text), ${[cString(format), ...args].join(", ")});`, `rp_label_set_text(${obj}, text);`];
+    return [`char text[${size}];`, `snprintf(text, sizeof(text), ${[cString(format), ...args].join(", ")});`, `${setter}(${obj}, text);`];
   }
-  return [`char text[${size}];`, "int n = 0;", ...appendStr(node, ""), `rp_label_set_text(${obj}, text);`];
+  return [`char text[${size}];`, "int n = 0;", ...appendStr(node, ""), `${setter}(${obj}, text);`];
 }
 
 function toStr(e: Expr): StrNode {
@@ -2479,6 +2482,20 @@ class Compiler {
           this.bind("value", e.deps, obj, [`rp_${widget}_set_value(${obj.name}, ${e.code});`]);
           break;
         }
+        case "options": {
+          const known = widget === "dropdown" && value ? this.tryConst(value, scope, module) : undefined;
+          if (!known || !Array.isArray(known.value) || !known.value.every((o) => typeof o === "string")) {
+            this.fail(node, module, "`options` must be a list of strings known at build time");
+          }
+          this.line(`rp_dropdown_set_options(${obj.name}, ${cString(known.value.join("\n"))});`);
+          break;
+        }
+        case "selected": {
+          if (widget !== "dropdown" || !value) this.fail(node, module, `<${widget}> has no "selected" prop`);
+          const e = this.number(value, scope, module);
+          this.bind("selected", e.deps, obj, [`rp_dropdown_set_selected(${obj.name}, ${e.code});`]);
+          break;
+        }
         case "src": {
           if (widget !== "image" || !value) this.fail(node, module, `<${widget}> has no "src" prop`);
           const src = this.imageSource(value, scope, module);
@@ -2544,6 +2561,12 @@ class Compiler {
       return;
     }
 
+    if (widget === "checkbox") {
+      const text = this.textOf(el.children, scope, module);
+      if (text) this.bind("text", text.deps, obj, setText(obj.name, text.node, "rp_checkbox_set_text"));
+      return;
+    }
+
     if (widget === "button") {
       const isElement = (c: JsxChild) =>
         c.type === "JSXElement" ||
@@ -2577,13 +2600,15 @@ class Compiler {
       EVENTS.onInput = "LV_EVENT_VALUE_CHANGED";
       EVENTS.onChange = "LV_EVENT_RELEASED";
     }
+    const toggle = widget === "switch" || widget === "checkbox";
+    if (toggle || widget === "dropdown") EVENTS.onChange = "LV_EVENT_VALUE_CHANGED";
     const event = EVENTS[name];
     if (!event) this.fail(value ?? ({} as t.Node), module, `<${widget}> has no "${name}" event`);
     if (!value) this.fail({} as t.Node, module, `"${name}" needs a function`);
 
     const body: string[] = [];
     const takesValue = name === "onInput" || name === "onChange";
-    const valueExpr: Expr = { type: "int", code: "value", deps: noDeps() };
+    const valueExpr: Expr = { type: toggle ? "bool" : "int", code: "value", deps: noDeps() };
     const args: Binding[] = takesValue ? [{ k: "value", expr: valueExpr }] : [];
 
     const n = unwrap(value);
@@ -2605,7 +2630,12 @@ class Compiler {
     }
 
     const handler: Handler = { name: `on_${this.program.handlers.length}${snake(name.slice(2))}`, body };
-    if (takesValue) handler.valueGetter = `lv_${widget}_get_value`;
+    if (takesValue) {
+      const target = "lv_event_get_target(e)";
+      if (toggle) handler.valueDecl = `const bool value = lv_obj_has_state(${target}, LV_STATE_CHECKED);`;
+      else if (widget === "dropdown") handler.valueDecl = `const int32_t value = (int32_t)lv_dropdown_get_selected(${target});`;
+      else handler.valueDecl = `const int32_t value = lv_${widget}_get_value(${target});`;
+    }
     this.program.handlers.push(handler);
     this.line(`rp_obj_on(${obj.name}, ${handler.name}, ${event});`);
   }

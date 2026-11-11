@@ -4,6 +4,7 @@ import { phase } from "./firmware.contract";
 import { History } from "./screens/History";
 import { Home } from "./screens/Home";
 import { LiveShot } from "./screens/LiveShot";
+import { Settings } from "./screens/Settings";
 import { Summary } from "./screens/Summary";
 import { PHASE, recordSample, tab } from "./state";
 import "./accents.css";
@@ -25,6 +26,9 @@ export default function App() {
           </Match>
           <Match when={tab() === "history"}>
             <History />
+          </Match>
+          <Match when={tab() === "settings"}>
+            <Settings />
           </Match>
           <Match when={tab() === "brew"}>
             <Home />

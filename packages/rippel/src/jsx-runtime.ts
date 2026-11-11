@@ -95,6 +95,25 @@ export namespace JSX {
       onInput?: (value: number) => void;
       onChange?: (value: number) => void;
     };
+    /** An on/off switch. Style it with `:checked`, `::indicator` and `::knob`. */
+    switch: CommonProps & {
+      /** Fires when the user flips the switch. */
+      onChange?: (checked: boolean) => void;
+    };
+    /** A checkbox. Its text children are the label. Style the box with `::indicator`. */
+    checkbox: CommonProps & {
+      children?: Element;
+      /** Fires when the user toggles the box. */
+      onChange?: (checked: boolean) => void;
+    };
+    /** A dropdown. Style its open list with `::items` and `::selected`. */
+    dropdown: Omit<CommonProps, "checked"> & {
+      options: string[];
+      /** Index of the chosen option. */
+      selected?: number;
+      /** Fires with the index the user picked. */
+      onChange?: (index: number) => void;
+    };
     /** A picture from an imported .png file. Sized to the image unless you set a width and height. */
     image: CommonProps & {
       src: ImageAsset;

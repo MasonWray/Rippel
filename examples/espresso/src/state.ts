@@ -1,12 +1,12 @@
 /** State shared across screens. One signal per fact; everything else is derived. */
 import { batch, createList, createSignal, type ListItem } from "rippel";
 import { f32, u8 } from "rippel/contract";
-import { ackShot, boilerC, elapsedDs, phase, pressureBar, setBoilerTarget, startShot, waterPct, weightG } from "./firmware.contract";
+import { ackShot, boilerC, elapsedDs, phase, pressureBar, setBeep, setBoilerTarget, startShot, waterPct, weightG } from "./firmware.contract";
 import { RECIPES } from "./recipes";
 
 export const PHASE = { idle: 0, preinfuse: 1, ramp: 2, extract: 3, done: 4 };
 
-export const [tab, setTab] = createSignal<"brew" | "history">("brew");
+export const [tab, setTab] = createSignal<"brew" | "history" | "settings">("brew");
 
 // Recipe and its adjustable settings
 
@@ -28,14 +28,43 @@ export function selectRecipe(index: number) {
     setRatioTenths(next.ratioTenths);
     setTempC(next.tempC);
   });
-  setBoilerTarget({ celsius: next.tempC });
+  applyBoilerTarget();
 }
+
+// Settings
+
+const ECO_DROP_C = 15;
+
+export const [ecoMode, setEcoMode] = createSignal(false);
+
+/** Asks the firmware for the recipe's temperature, or a cooler one in eco mode. */
+export function applyBoilerTarget() {
+  setBoilerTarget({ celsius: ecoMode() ? tempC() - ECO_DROP_C : tempC() });
+}
+
+export function toggleEco(on: boolean) {
+  setEcoMode(on);
+  applyBoilerTarget();
+}
+
+export const [beepWhenDone, setBeepWhenDone] = createSignal(true);
+
+export function toggleBeep(on: boolean) {
+  setBeepWhenDone(on);
+  setBeep({ on });
+}
+
+export const UNITS = ["Celsius", "Fahrenheit"];
+export const [units, setUnits] = createSignal(0);
+
+/** A Celsius reading in the units the user picked, rounded for display. */
+export const showTemp = (celsius: number) => Math.round(units() === 0 ? celsius : celsius * 1.8 + 32);
 
 // Machine readiness
 
 export const boilerReady = () => Math.abs(boilerC() - tempC()) <= 1;
 export const waterLow = () => waterPct() < 15;
-export const canBrew = () => boilerReady() && !waterLow();
+export const canBrew = () => boilerReady() && !waterLow() && !ecoMode();
 
 // Live pressure trace: one signal per chart column, so each sample redraws one bar
 

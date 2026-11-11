@@ -1,4 +1,4 @@
-import { action, f32, signal, u16, u8 } from "rippel/contract";
+import { action, bool, f32, signal, u16, u8 } from "rippel/contract";
 
 /** Boiler temperature in °C. */
 export const boilerC = signal(f32, { initial: 62 });
@@ -26,6 +26,9 @@ export const setBoilerTarget = action({ celsius: u8 });
 
 /** Starts a shot on a pressure profile, stopping at the target weight. */
 export const startShot = action({ recipe: u8, yieldG: u16 });
+
+/** Turns the end-of-shot beep on or off. */
+export const setBeep = action({ on: bool });
 
 /** Stops the running shot early. */
 export const stopShot = action({});

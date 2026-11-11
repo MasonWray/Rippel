@@ -161,7 +161,7 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
 
   if (program.handlers.length) out.push("/* Event handlers */", "");
   for (const h of program.handlers) {
-    const body = h.valueGetter ? [`int32_t value = ${h.valueGetter}(lv_event_get_target(e));`, ...h.body] : ["LV_UNUSED(e);", ...h.body];
+    const body = h.valueDecl ? [h.valueDecl, ...h.body] : ["LV_UNUSED(e);", ...h.body];
     out.push(...functionBlock(`static void ${h.name}(lv_event_t * e)`, body));
   }
 
@@ -211,6 +211,9 @@ function emitLvConf(config: ResolvedConfig, program: UiProgram, builtinSizes: Se
   add("arc", "ARC");
   add("bar", "BAR");
   add("image", "IMAGE");
+  add("switch", "SWITCH");
+  add("checkbox", "CHECKBOX");
+  add("dropdown", "DROPDOWN");
   if (program.usedWidgets.has("slider")) {
     used.add("SLIDER");
     used.add("BAR");
@@ -369,8 +372,8 @@ export async function buildProject(config: ResolvedConfig, outDirOverride?: stri
     styleContext: styleContext(config),
     fontSymbol,
     styles: {
-      add: (obj, classes) => rulesFor(classes).map((r) => `lv_obj_add_style(${obj}, &${r.name}, ${r.selector});`),
-      remove: (obj, classes) => rulesFor(classes).map((r) => `lv_obj_remove_style(${obj}, &${r.name}, ${r.selector});`),
+      add: (obj, classes) => rulesFor(classes).map((r) => `rp_obj_add_style(${obj}, &${r.name}, ${r.selector});`),
+      remove: (obj, classes) => rulesFor(classes).map((r) => `rp_obj_remove_style(${obj}, &${r.name}, ${r.selector});`),
     },
   });
 

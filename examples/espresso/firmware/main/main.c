@@ -127,6 +127,11 @@ static void on_start_shot(uint8_t recipe, uint16_t yield_g)
     ui_set_elapsed_ds(0);
 }
 
+static void on_set_beep(bool on)
+{
+    ESP_LOGI(TAG, "End-of-shot beep: %s", on ? "on" : "off");
+}
+
 static void on_stop_shot(void)
 {
     finish_shot();
@@ -190,6 +195,7 @@ void app_main(void)
     static const ui_actions_t actions = {
         .set_boiler_target = on_set_boiler_target,
         .start_shot = on_start_shot,
+        .set_beep = on_set_beep,
         .stop_shot = on_stop_shot,
         .ack_shot = on_ack_shot,
     };
