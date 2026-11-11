@@ -1,5 +1,5 @@
 idf_component_register(
-  SRCS "main.c" "hx8357.c" "touch.c"
+  SRCS "main.c"
   INCLUDE_DIRS "."
-  REQUIRES ui lvgl esp_lcd esp_driver_gpio esp_driver_spi esp_adc esp_timer
+  REQUIRES ui lvgl qtpy_s3_hx8357 esp_timer
 )

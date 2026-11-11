@@ -4,7 +4,7 @@
 // lv_conf.h. One side renders the TSX through the Solid renderer, the other
 // runs the C. A scenario file drives both through the same signals and touches.
 //
-// Usage: node scripts/conformance.mjs <project-dir> <generated-c-dir> [scenario.json]
+// Usage: node scripts/conformance.mjs <project-dir> <generated-c-dir> [scenario.json] [entry]
 // Requires Emscripten and the object files left by `npm run build:wasm`.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,7 +16,7 @@ const repoDir = join(pkgDir, "..", "..");
 const nativeDir = join(pkgDir, "native");
 const objDir = join(pkgDir, "wasm", "build");
 
-const [projectArg, generatedArg, scenarioArg] = process.argv.slice(2);
+const [projectArg, generatedArg, scenarioArg, entryArg] = process.argv.slice(2);
 if (!projectArg || !generatedArg) {
   console.error("Usage: node scripts/conformance.mjs <project-dir> <generated-c-dir> [scenario.json]");
   process.exit(2);
@@ -65,6 +65,7 @@ const { rippel } = await import("../dist/vite/plugin.js");
 const { buildFont } = await import("../dist/node/fonts.js");
 
 const config = await loadConfig(projectDir);
+if (entryArg) config.entry = resolve(projectDir, entryArg);
 const { width, height, colorFormat, dpi } = config.display;
 const COLOR_FORMAT = { RGB565: 0, RGB888: 1, XRGB8888: 2 };
 const scenarioFile = scenarioArg ? resolve(scenarioArg) : join(projectDir, "conformance.json");
@@ -215,10 +216,10 @@ try {
   const c = await startC(signals);
 
   let previous;
-  const check = async (name) => {
+  const check = async (name, quiet = false) => {
     const [a, b] = [await dev.draw(), await c.draw()];
     if (!compare(name, a, b)) failed = true;
-    if (previous && previous.every((v, i) => v === a[i])) {
+    if (!quiet && previous && previous.every((v, i) => v === a[i])) {
       console.log(`  FAIL  ${name}: this step didn't change anything on screen`);
       failed = true;
     }
@@ -230,6 +231,7 @@ try {
   for (const step of scenario) {
     for (const side of [dev, c]) {
       if (step.signal) side.setSignal(step.signal, step.value);
+      for (const [name, value] of Object.entries(step.signals ?? {})) side.setSignal(name, value);
       if (step.touch) {
         // A finger hovers, presses, moves in small steps and lifts, with time passing in between.
         const [x0, y0] = step.touch;
@@ -246,7 +248,7 @@ try {
         await move(1, false);
       }
     }
-    await check(step.name ?? JSON.stringify(step));
+    await check(step.name ?? JSON.stringify(step), step.quiet);
   }
 } finally {
   await server.close();

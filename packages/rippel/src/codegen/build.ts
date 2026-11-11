@@ -31,6 +31,7 @@ function paramType(value: ValueInfo): string {
 }
 
 function signalDecl(signal: Signal): string {
+  if (signal.value.base === "string" && signal.kind === "local") return `static const char * sig_${signal.name} = ${signal.initial};`;
   if (signal.value.base === "string") return `static char sig_${signal.name}[${(signal.value.maxLength ?? 0) + 1}] = ${signal.initial};`;
   return `static ${signal.value.ctype} sig_${signal.name} = ${signal.initial};`;
 }
@@ -38,7 +39,11 @@ function signalDecl(signal: Signal): string {
 function setterBody(signal: Signal): string[] {
   const lines =
     signal.value.base === "string"
-      ? [`    if(strcmp(sig_${signal.name}, value) == 0) return;`, `    lv_strlcpy(sig_${signal.name}, value, sizeof(sig_${signal.name}));`]
+      ? [
+          `    if(strcmp(sig_${signal.name}, value) == 0) return;`,
+          // Local string signals only ever hold literals, so they keep the pointer.
+          signal.kind === "local" ? `    sig_${signal.name} = value;` : `    lv_strlcpy(sig_${signal.name}, value, sizeof(sig_${signal.name}));`,
+        ]
       : [`    if(sig_${signal.name} == value) return;`, `    sig_${signal.name} = value;`];
   return [...lines, ...signal.binds.map((b) => `    ${b.name}();`)];
 }
@@ -107,6 +112,12 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
   if (customFonts.length) out.push("");
 
   out.push("/* Styles */", ...styleDecls, "");
+
+  if (program.tables.length) {
+    out.push("/* Values looked up by a signal */");
+    for (const table of program.tables) out.push(`static const ${table.ctype} ${table.name}[] = { ${table.values.join(", ")} };`);
+    out.push("");
+  }
 
   if (program.signals.length) {
     out.push("/* Signals */");
@@ -191,7 +202,7 @@ function emitLvConf(config: ResolvedConfig, program: UiProgram, builtinSizes: Se
   const { family, size } = config.defaultFont;
   const fallback = family === "montserrat" ? size : 14;
   const sizes = new Set(builtinSizes).add(fallback);
-  const memKB = config.mcu ? Math.max(32, Math.min(256, Math.round(config.mcu.ramKB / 8))) : 64;
+  const memKB = config.output?.lvglHeapKB ?? (config.mcu ? Math.max(32, Math.min(256, Math.round(config.mcu.ramKB / 8))) : 64);
 
   const lines = [
     BANNER,

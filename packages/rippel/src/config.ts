@@ -31,6 +31,8 @@ export interface RippelConfig {
   output?: {
     dir: string;
     integration?: "cmake" | "esp-idf" | "zephyr" | "platformio";
+    /** Memory LVGL reserves for its objects and styles. Defaults to an eighth of the MCU's RAM. */
+    lvglHeapKB?: number;
   };
 }
 

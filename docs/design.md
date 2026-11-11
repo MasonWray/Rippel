@@ -239,9 +239,20 @@ Notes from bringing it up on the board:
 
 ### M3 and later
 
-- `<For>` and `<Index>`, dynamic lists, and the string memory model
-- Inline styles that change at runtime, and local string signals
-- Local signals inside `<Show>` and `<Switch>` branches
+**In progress.** The target is the espresso demo on the reference board. Everything except its History screen now builds and runs there, using these additions:
+
+- **Compile-time evaluation.** Anything that doesn't depend on a signal is computed during the build, including constant tables, `.map` and your own helper functions. `<For>` over a constant list expands into one copy per item.
+- **Tables read through a signal.** A value like `RECIPES[recipeIndex()].name` is evaluated once per row and becomes a C lookup table. Class names work the same way.
+- **`createEffect`** becomes a bind function that re-runs when any signal it read changes.
+- **Inline lengths** like `height` can change at runtime.
+- **Local string signals** hold pointers to string literals.
+- **Branch state:** local signals inside a `<Show>` or `<Switch>` branch reset when it reopens, as they do in the dev runtime.
+- `output.lvglHeapKB` sets LVGL's memory. Every branch is built up front, so a UI with several screens needs more than one screen's worth.
+
+Still to come:
+
+
+- `<For>` and `<Index>` over lists that change at runtime, and the memory model for lists and strings
 - More widgets, images, animations, multiple screens and navigation
 - Single-binary compiler (decision 10)
 - More integrations (Zephyr, PlatformIO), more MCU and display presets

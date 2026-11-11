@@ -26,6 +26,7 @@ Options:
   --port <n>   Port for the dev server (default 5173)
   --host       Listen on all network interfaces
   --out <dir>  Where build writes (default: output.dir in rippel.config.ts)
+  --entry <f>  Build this root component instead of the configured entry
   -h, --help   Show this help
 `;
 
@@ -85,9 +86,10 @@ async function check(root: string): Promise<number> {
   return problems ? 1 : 0;
 }
 
-async function build(root: string, out: string | undefined): Promise<number> {
+async function build(root: string, out: string | undefined, entry: string | undefined): Promise<number> {
   if ((await check(root)) !== 0) return 1;
   const config = await loadConfig(root);
+  if (entry) config.entry = resolve(root, entry);
   try {
     const result = await buildProject(config, out);
     for (const warning of result.warnings) console.log(`Warning: ${warning}`);
@@ -108,6 +110,7 @@ async function main() {
     options: {
       port: { type: "string" },
       out: { type: "string" },
+      entry: { type: "string" },
       host: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -124,7 +127,7 @@ async function main() {
   } else if (command === "check") {
     process.exitCode = await check(root);
   } else if (command === "build") {
-    process.exitCode = await build(root, values.out);
+    process.exitCode = await build(root, values.out, values.entry);
   } else {
     console.error(`Unknown command "${command}".\n\n${HELP}`);
     process.exitCode = 1;
