@@ -8,6 +8,11 @@ export default defineConfig({
   mock: "src/firmware.mock.ts",
   display: adafruit_3_5_tft({ rotation: 90 }),
   mcu: esp32s3(),
+  output: {
+    dir: "firmware/components/ui",
+    integration: "esp-idf",
+    lvglHeapKB: 160,
+  },
   fonts: {
     // Only the glyphs the big readouts need, to keep flash use down.
     // Lato ships with LVGL's examples (SIL Open Font License).

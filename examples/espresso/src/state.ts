@@ -41,7 +41,7 @@ export const canBrew = () => boilerReady() && !waterLow();
 export const COLUMNS = Array.from({ length: 40 }, (_, i) => i);
 const columns = COLUMNS.map(() => createSignal(0));
 export const sample = (col: number) => columns[col][0]();
-export const peakPressure = () => Math.max(...COLUMNS.map(sample));
+export const [peakPressure, setPeakPressure] = createSignal(0);
 
 /** The column the current moment of the shot falls in. */
 function currentColumn() {
@@ -53,11 +53,13 @@ function currentColumn() {
 export function recordSample() {
   if (phase() === PHASE.idle || phase() === PHASE.done) return;
   columns[currentColumn()][1](pressureBar());
+  setPeakPressure(Math.max(peakPressure(), pressureBar()));
 }
 
 export function beginShot() {
   batch(() => {
     for (const [, set] of columns) set(0);
+    setPeakPressure(0);
   });
   startShot({ recipe: recipeIndex(), yieldG: targetYieldG() });
 }

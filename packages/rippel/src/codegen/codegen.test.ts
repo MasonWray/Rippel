@@ -39,7 +39,7 @@ async function build(files: Record<string, string>, out = "out") {
 
 const app = (body: string, before = "") => ({
   "src/App.tsx": `
-    import { createSignal, createMemo, Show, Switch, Match, For } from "rippel";
+    import { createSignal, createMemo, createEffect, Show, Switch, Match, For } from "rippel";
     import { temperature, level, online, name, battery, setpoint } from "./firmware.contract";
     ${before}
     export default function App() { ${body} }
@@ -148,11 +148,87 @@ describe("rippel build", () => {
   });
 
   it("reports what it can't compile yet, with a location", async () => {
-    await expect(build(app(`return <view><For each={[1]}>{() => <view />}</For></view>;`))).rejects.toMatchObject({
+    await expect(build(app(`return <view><For each={[temperature()]}>{() => <view />}</For></view>;`))).rejects.toMatchObject({
       name: "CodegenError",
       line: 5,
-      message: expect.stringMatching(/<For> isn't supported.*M3/),
+      message: expect.stringMatching(/<For> over a list that changes at runtime.*M3/),
     });
-    await expect(build(app(`const [n] = createSignal(1); return <view><Show when={online()}><Inner /></Show></view>; function Inner() { const [m] = createSignal(1); return <view />; }`))).rejects.toBeInstanceOf(CodegenError);
+    await expect(build(app(`const [items] = createSignal([1]); return <label>{items()}</label>;`))).rejects.toBeInstanceOf(CodegenError);
+  });
+
+  it("expands <For> over constant data", async () => {
+    const { ui } = await build(app(`const ROWS = [{ name: "A" }, { name: "B" }]; return <view><For each={ROWS}>{(row, i) => <label>{row.name}{i()}</label>}</For></view>;`));
+    expect(ui).toContain('lv_label_set_text(o_label, "A0");');
+    expect(ui).toContain('lv_label_set_text(o_label_2, "B1");');
+  });
+
+  it("runs helper functions over constants at build time", async () => {
+    const { ui } = await build(
+      app(
+        `return <label>{total(TABLE)}</label>;`,
+        `const TABLE = [1, 2, 3];
+         function total(list: number[]) { let_free: for (const v of list) { if (v > 2) return v * 10; } return 0; }`.replace("let_free: ", ""),
+      ),
+    );
+    expect(ui).toContain('lv_label_set_text(o_label, "30");');
+  });
+
+  it("turns a table read through a signal into a lookup table", async () => {
+    const { ui } = await build({
+      ...app(
+        `const [i, setI] = createSignal(0);
+         const row = () => ROWS[i()];
+         return <button class={\`card c-\${row().tone}\`} onClick={() => setI(1)}>{row().name} {row().size}</button>;`,
+        `import "./app.css"; const ROWS = [{ name: "One", tone: "a", size: 10 }, { name: "Two", tone: "b", size: 20 }];`,
+      ),
+      "src/app.css": `.c-a { opacity: 1 } .c-b { opacity: 0.5 }`,
+    });
+    expect(ui).toContain('static const char * const lut_0[] = { "One", "Two" };');
+    expect(ui).toContain("static const int32_t lut_1[] = { 10, 20 };");
+    expect(ui).toContain("const int32_t next = (sig_i == 0) ? 0 : 1;");
+    expect(ui).toMatch(/"%s %d", lut_0\[sig_i\], \(int\)\(?lut_1\[sig_i\]\)?/);
+  });
+
+  it("compiles string signals to pointers", async () => {
+    const { ui } = await build(app(`const [tab, setTab] = createSignal("a"); return <button checked={tab() === "b"} onClick={() => setTab("b")}>{tab()}</button>;`));
+    expect(ui).toContain('static const char * sig_tab = "a";');
+    expect(ui).toContain("(strcmp(sig_tab, \"b\") == 0)");
+    expect(ui).toContain("sig_tab = value;");
+  });
+
+  it("resets a branch's local signals when it reopens", async () => {
+    const { ui } = await build(
+      app(
+        `return <view><Show when={online()}><Inner /></Show></view>;`,
+        `function Inner() { const [m, setM] = createSignal(1); return <button onClick={() => setM(m() + 1)}>{m()}</button>; }`,
+      ),
+    );
+    expect(ui).toContain("if(active != shown) {");
+    expect(ui).toContain("set_m(1);");
+  });
+
+  it("binds inline lengths that change at runtime", async () => {
+    const { ui } = await build(app(`return <view style={{ height: Math.round(level() * 8) }} />;`));
+    expect(ui).toContain("rp_obj_set_local_num(o_view, LV_STYLE_HEIGHT, (int32_t)floorf((sig_level * 8) + 0.5f), LV_PART_MAIN);");
+  });
+
+  it("runs effects when the signals they read change", async () => {
+    const { ui } = await build(
+      app(`const [seen, setSeen] = createSignal(0); createEffect(() => { setSeen(temperature()); }); return <label>{seen()}</label>;`).valueOf() as Record<string, string>,
+    );
+    expect(ui).toMatch(/static void bind_\d+_effect\(void\)\n\{\n    set_seen\(sig_temperature\);/);
+    expect(ui).toMatch(/void ui_set_temperature\(int16_t value\)[^}]*bind_\d+_effect\(\);/);
+  });
+
+  it("expands a setter picked from a constant list at runtime into a switch", async () => {
+    const { ui } = await build(
+      app(
+        `const pair = LIST.map(() => createSignal(0));
+         return <button onClick={() => pair[temperature()][1](5)}>{pair[0][0]()}</button>;`,
+        `const LIST = [0, 1];`,
+      ),
+    );
+    expect(ui).toContain("switch(sig_temperature) {");
+    expect(ui).toContain("case 1:");
   });
 });

@@ -5,7 +5,7 @@ import { History } from "./screens/History";
 import { Home } from "./screens/Home";
 import { LiveShot } from "./screens/LiveShot";
 import { Summary } from "./screens/Summary";
-import { PHASE, recordSample, tab } from "./state";
+import { PHASE, recordSample, saveFinishedShot, tab } from "./state";
 import "./accents.css";
 import "./styles.css";
 
@@ -14,11 +14,11 @@ export default function App() {
 
   return (
     <view class="app">
-      <Nav />
+      <Nav history={true} />
       <view class="content">
         <Switch>
           <Match when={phase() === PHASE.done}>
-            <Summary />
+            <Summary onSave={saveFinishedShot} />
           </Match>
           <Match when={phase() !== PHASE.idle}>
             <LiveShot />

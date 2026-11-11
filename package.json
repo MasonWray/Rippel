@@ -13,6 +13,7 @@
     "test": "npm test -w rippel",
     "conformance": "npm run build && npm run build -w thermostat-example && node packages/rippel/scripts/conformance.mjs examples/thermostat examples/thermostat/firmware/components/ui",
     "dev": "npm run build && npm run dev -w thermostat-example",
-    "demo": "npm run build && npm run dev -w espresso-example"
+    "demo": "npm run build && npm run dev -w espresso-example",
+    "conformance:espresso": "npm run build && npm run build -w espresso-example && node packages/rippel/scripts/conformance.mjs examples/espresso examples/espresso/firmware/components/ui examples/espresso/conformance.json src/App.device.tsx"
   }
 }

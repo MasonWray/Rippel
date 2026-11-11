@@ -1,0 +1,16 @@
+[
+  { "name": "boiler reaches temperature", "signal": "boilerC", "value": 93 },
+  { "name": "pick the Bloom recipe", "touch": [208, 39] },
+  { "name": "drag the dose slider", "touch": [369, 109], "drag": [300, 109] },
+  { "name": "press start", "touch": [136, 287], "quiet": true },
+  { "name": "pre-infusion", "signals": { "phase": 1, "elapsedDs": 40, "pressureBar": 2.5, "flowMlS": 0.2, "weightG": 0 } },
+  { "name": "later in pre-infusion", "signals": { "elapsedDs": 90, "pressureBar": 3.5, "flowMlS": 0.6, "weightG": 1.5 } },
+  { "name": "ramp", "signals": { "phase": 2, "elapsedDs": 150, "pressureBar": 8.2, "flowMlS": 1.8, "weightG": 8 } },
+  { "name": "extraction", "signals": { "phase": 3, "elapsedDs": 240, "pressureBar": 7.1, "flowMlS": 2.4, "weightG": 28.4 } },
+  { "name": "shot finished", "signals": { "phase": 4, "elapsedDs": 320, "pressureBar": 0, "flowMlS": 0, "weightG": 45 } },
+  { "name": "rate the shot", "touch": [166, 294] },
+  { "name": "back to idle", "signal": "phase", "value": 0 },
+  { "name": "tank runs low", "signal": "waterPct", "value": 8 },
+  { "name": "second shot starts", "signals": { "waterPct": 70, "phase": 1, "elapsedDs": 10, "pressureBar": 1 } },
+  { "name": "rating starts over", "signals": { "phase": 4, "elapsedDs": 200, "weightG": 30 } }
+]

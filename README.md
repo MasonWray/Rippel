@@ -36,7 +36,7 @@ Wait for the boiler to heat up, pick a recipe and press **Start shot**. Things t
 - In History, sort by **Top rated** and change a rating. The rows reorder as you tap.
 - In the signals panel, drag `waterPct` below 15 to see the machine refuse to brew.
 
-The demo runs in the browser simulator. `rippel build` can't compile it yet, because it uses `<For>` and other features planned for M3.
+`examples/espresso/firmware` runs the same UI on an ESP32-S3 and a 480×320 display, except for History, which needs lists that change at runtime. Build it with `npm run build -w espresso-example`, then `idf.py build flash monitor` in that folder.
 
 ## What a Rippel project looks like
 
@@ -87,7 +87,7 @@ docs/design.md            design doc
 
 ## Run it on a device
 
-`examples/thermostat/firmware` is an ESP-IDF project for an ESP32-S3 and a 480×320 HX8357D display. The wiring is in `main/board.h`. With ESP-IDF 5.5 set up in your shell:
+`examples/thermostat/firmware` is an ESP-IDF project for an ESP32-S3 and a 480×320 HX8357D display. The wiring is in `examples/shared/qtpy_s3_hx8357/board.h`. With ESP-IDF 5.5 set up in your shell:
 
 ```bash
 npm run build
