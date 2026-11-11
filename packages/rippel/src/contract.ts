@@ -10,6 +10,7 @@
  * In the dev runtime, the mock panel sets signals and logs actions.
  */
 import { createSignal } from "solid-js";
+import { createList, type ListFields, type ListItem, type ListValues, type RippelList } from "./list.js";
 
 export type IntName = "i8" | "u8" | "i16" | "u16" | "i32" | "u32";
 
@@ -133,8 +134,70 @@ export function action<P extends Record<string, ValueType>>(params: P): Firmware
 }
 
 /** Dev shell: reads contract metadata from a value, if it is a signal or action. */
-export function contractMeta(value: unknown): SignalMeta | ActionMeta | undefined {
-  if (typeof value === "function" && META in value) return (value as { [META]: SignalMeta | ActionMeta })[META];
+/** What the firmware can do to one of its lists. Items are identified by the id `add` returns. */
+export interface FirmwareListHandle<F extends ListFields> {
+  add(values: ListValues<F>): number;
+  update(id: number, changes: Partial<ListValues<F>>): void;
+  remove(id: number): void;
+  clear(): void;
+}
+
+export interface ListMeta<F extends ListFields = ListFields> {
+  kind: "list";
+  capacity: number;
+  fields: F;
+  name?: string;
+  /** The list as the UI sees it. */
+  list: RippelList<F>;
+  /** The firmware's side, used by the mock and the dev panel. */
+  firmware: FirmwareListHandle<F>;
+}
+
+/** A list the firmware fills. The UI can read it but not change it. */
+export type FirmwareList<F extends ListFields> = Pick<RippelList<F>, "capacity" | "size" | "items" | "sorted" | "sum"> & {
+  readonly [META]: ListMeta<F>;
+};
+
+/**
+ * Declares a list the firmware fills, like Wi-Fi scan results. It has a fixed
+ * capacity and field types, so the device reserves its storage at build time.
+ * The firmware gets ui_<name>_add, _update, _remove and _clear functions.
+ */
+export function list<F extends ListFields>(options: { capacity: number; fields: F }): FirmwareList<F> {
+  const inner = createList({ capacity: options.capacity, fields: options.fields });
+  const find = (id: number) => inner.items().find((item) => item.id === id);
+  const firmware: FirmwareListHandle<F> = {
+    add: (values) => inner.add(values),
+    update(id, changes) {
+      const item = find(id);
+      if (item) inner.update(item, changes);
+    },
+    remove(id) {
+      const item = find(id);
+      if (item) inner.remove(item);
+    },
+    clear() {
+      for (const item of inner.items()) inner.remove(item);
+    },
+  };
+  const meta: ListMeta<F> = { kind: "list", capacity: options.capacity, fields: options.fields, list: inner, firmware };
+  return {
+    capacity: inner.capacity,
+    size: inner.size,
+    items: inner.items,
+    sorted: inner.sorted,
+    sum: inner.sum,
+    [META]: meta,
+  };
+}
+
+export type { ListItem };
+
+/** Dev shell: reads contract metadata from a value, if it is a signal, action or list. */
+export function contractMeta(value: unknown): SignalMeta | ActionMeta | ListMeta | undefined {
+  if ((typeof value === "function" || (typeof value === "object" && value !== null)) && META in value) {
+    return (value as { [META]: SignalMeta | ActionMeta | ListMeta })[META];
+  }
   return undefined;
 }
 

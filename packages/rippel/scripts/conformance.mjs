@@ -135,6 +135,13 @@ async function startDev() {
     pointer: (x, y, down) => lv.pointer(x, y, down),
     tick: () => lv.tick(16),
     setSignal: (name, value) => contractMeta(contract[name]).set(value),
+    listOp(name, op, arg) {
+      const handle = contractMeta(contract[name]).firmware;
+      if (op === "add") handle.add(arg);
+      else if (op === "update") handle.update(arg.id, arg);
+      else if (op === "remove") handle.remove(arg);
+      else handle.clear();
+    },
     async draw() {
       for (let i = 0; i < FRAME_TICKS; i++) {
         lv.tick(16);
@@ -146,8 +153,9 @@ async function startDev() {
   };
 }
 
-async function startC(exportedSignals) {
-  const factory = await link("c", compiled, ["_malloc", "_free", "_ui_init", "_lv_display_get_default", ...exportedSignals]);
+async function startC(exportedSignals, lists) {
+  const listExports = Object.keys(lists).flatMap((name) => ["add", "update", "remove", "clear"].map((op) => `_ui_${snake(name)}_${op}`));
+  const factory = await link("c", compiled, ["_malloc", "_free", "_ui_init", "_lv_display_get_default", ...exportedSignals, ...listExports]);
   const m = await factory();
   if (m._rp_sim_init(width, height, COLOR_FORMAT[colorFormat], dpi) !== 0) throw new Error("Simulator failed to start");
   m.onRippelEvent = () => {};
@@ -160,7 +168,33 @@ async function startC(exportedSignals) {
     setSignal(name, value) {
       const setter = m[`_ui_set_${snake(name)}`];
       if (!setter) throw new Error(`Generated code has no ui_set_${snake(name)}`);
+      if (typeof value === "string") {
+        const ptr = m.stringToNewUTF8(value);
+        setter(ptr);
+        m._free(ptr);
+        return;
+      }
       setter(typeof value === "boolean" ? (value ? 1 : 0) : value);
+    },
+    listOp(name, op, arg) {
+      const fn = m[`_ui_${snake(name)}_${op}`];
+      if (!fn) throw new Error(`Generated code has no ui_${snake(name)}_${op}`);
+      const strings = [];
+      const fieldArgs = (values) =>
+        Object.entries(lists[name]).map(([field, type]) => {
+          const value = values[field];
+          if (type.kind === "string") {
+            const ptr = m.stringToNewUTF8(String(value ?? ""));
+            strings.push(ptr);
+            return ptr;
+          }
+          return typeof value === "boolean" ? (value ? 1 : 0) : (value ?? 0);
+        });
+      if (op === "add") fn(...fieldArgs(arg));
+      else if (op === "update") fn(arg.id, ...fieldArgs(arg));
+      else if (op === "remove") fn(arg);
+      else fn();
+      for (const ptr of strings) m._free(ptr);
     },
     async draw() {
       for (let i = 0; i < FRAME_TICKS; i++) m._rp_sim_tick(16);
@@ -211,9 +245,14 @@ try {
   const contract = config.contract ? await load(config.contract) : {};
   const { contractMeta } = await load(dist("contract.js"));
   const signals = Object.entries(contract).filter(([, v]) => contractMeta(v)?.kind === "signal").map(([k]) => `_ui_set_${snake(k)}`);
+  const lists = Object.fromEntries(
+    Object.entries(contract)
+      .filter(([, v]) => contractMeta(v)?.kind === "list")
+      .map(([k, v]) => [k, contractMeta(v).fields]),
+  );
 
   const dev = await startDev();
-  const c = await startC(signals);
+  const c = await startC(signals, lists);
 
   let previous;
   const check = async (name, quiet = false) => {
@@ -232,6 +271,9 @@ try {
     for (const side of [dev, c]) {
       if (step.signal) side.setSignal(step.signal, step.value);
       for (const [name, value] of Object.entries(step.signals ?? {})) side.setSignal(name, value);
+      if (step.list) {
+        for (const op of ["add", "update", "remove", "clear"]) if (op in step) side.listOp(step.list, op, step[op]);
+      }
       if (step.touch) {
         // A finger hovers, presses, moves in small steps and lifts, with time passing in between.
         const [x0, y0] = step.touch;

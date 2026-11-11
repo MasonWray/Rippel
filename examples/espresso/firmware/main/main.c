@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -52,6 +53,23 @@ static const recipe_t recipes[] = {
 };
 
 static const char * TAG = "espresso";
+
+/* Simulated Wi-Fi scan results. */
+typedef struct {
+    const char * ssid;
+    int8_t rssi;
+    bool secure;
+    uint32_t id;
+} sim_network_t;
+
+static sim_network_t networks[] = {
+    { "Kitchen", -48, true, 0 },
+    { "Cafe Guest", -61, false, 0 },
+    { "Upstairs", -67, true, 0 },
+    { "Printer-2F4A", -72, false, 0 },
+    { "Neighbor-5G", -79, true, 0 },
+};
+static uint32_t scans;
 
 static float boiler = 62;
 static float boiler_target = 93;
@@ -141,6 +159,32 @@ static void on_ack_shot(void)
     ui_set_phase(PHASE_IDLE);
 }
 
+static void on_connect_wifi(const char * ssid)
+{
+    ESP_LOGI(TAG, "Joining %s", ssid);
+    ui_set_wifi_ssid(ssid);
+}
+
+/* The first scan finds networks, then their signal strength drifts and one comes and goes. */
+static void wifi_scan(void)
+{
+    scans++;
+    for(size_t i = 0; i < sizeof(networks) / sizeof(networks[0]); i++) {
+        sim_network_t * n = &networks[i];
+        bool flaky = strcmp(n->ssid, "Neighbor-5G") == 0;
+        bool visible = !flaky || (scans / 5) % 2 == 0;
+        if(!visible) {
+            if(n->id) ui_wifi_networks_remove(n->id);
+            n->id = 0;
+            continue;
+        }
+        int rssi = n->rssi + (rand() % 7) - 3;
+        n->rssi = (int8_t)(rssi < -90 ? -90 : rssi > -35 ? -35 : rssi);
+        if(n->id) ui_wifi_networks_update(n->id, n->ssid, n->rssi, n->secure);
+        else n->id = ui_wifi_networks_add(n->ssid, n->rssi, n->secure);
+    }
+}
+
 static void machine_tick(float dt)
 {
     /* The brew water pulls the boiler down a little during a shot. */
@@ -197,12 +241,14 @@ void app_main(void)
         .set_beep = on_set_beep,
         .stop_shot = on_stop_shot,
         .ack_shot = on_ack_shot,
+        .connect_wifi = on_connect_wifi,
     };
     ui_set_actions(&actions);
     ui_init(disp);
 
     uint32_t last_tick = tick_ms();
     uint32_t last_status = last_tick;
+    uint32_t last_scan = last_tick;
     while(true) {
         uint32_t wait = lv_timer_handler();
 
@@ -210,6 +256,10 @@ void app_main(void)
         if(elapsed >= MACHINE_PERIOD_MS) {
             last_tick = tick_ms();
             machine_tick((float)elapsed / 1000.0f);
+        }
+        if(lv_tick_elaps(last_scan) >= 2000) {
+            last_scan = tick_ms();
+            wifi_scan();
         }
         if(lv_tick_elaps(last_status) >= STATUS_PERIOD_MS) {
             last_status = tick_ms();

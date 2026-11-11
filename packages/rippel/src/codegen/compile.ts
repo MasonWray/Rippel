@@ -108,6 +108,8 @@ export interface UiProgram {
   lists: { storage: string; capacity: number; fields: string[]; rows: string[]; nextId: number }[];
   /** Generated helpers, callable from bindings and handlers. */
   functions: { signature: string; body: string[] }[];
+  /** Public functions for the firmware, declared in ui.h. */
+  exports: { comment: string; signature: string; body: string[] }[];
   declarations: string[];
 }
 
@@ -188,6 +190,8 @@ interface ListSlot {
 
 interface ListInfo {
   name: string;
+  /** Filled by the firmware through generated ui_<name>_* functions. The UI can only read it. */
+  firmware: boolean;
   storage: string;
   capacity: number;
   fields: Map<string, { c: string; value: ValueInfo }>;
@@ -465,6 +469,7 @@ class Compiler {
     tables: [],
     lists: [],
     functions: [],
+    exports: [],
     declarations: [],
   };
   private readonly modules = new Map<string, Module>();
@@ -540,6 +545,11 @@ class Compiler {
           this.fail(decl, module, "Expected `export const name = signal(...)` or `action(...)`");
         }
         const name = decl.id.name;
+        if (init.callee.name === "list") {
+          const list = this.createList(name, init, module.scope, module, true);
+          this.contract.set(name, { k: "list", list });
+          continue;
+        }
         if (init.callee.name === "signal") {
           const value = typeOf(init.arguments[0]);
           const signal: Signal = { name: snake(name), kind: "firmware", value, initial: this.contractInitial(init.arguments[1], value, module), binds: [] };
@@ -1535,7 +1545,7 @@ class Compiler {
   }
 
   /** Reserves storage for a list, with one set of signals per slot, and generates its `add`. */
-  private createList(hint: string, n: t.CallExpression, scope: Scope, module: Module): ListInfo {
+  private createList(hint: string, n: t.CallExpression, scope: Scope, module: Module, firmware = false): ListInfo {
     const options = n.arguments[0] && unwrap(n.arguments[0]);
     if (options?.type !== "ObjectExpression") this.fail(n, module, "createList takes `{ capacity, fields, initial }`");
     const option = (key: string) => {
@@ -1604,7 +1614,7 @@ class Compiler {
       info.value.base === "string" ? `char ${info.c}[${(info.value.maxLength ?? 0) + 1}];` : `${info.value.ctype} ${info.c};`;
     this.program.lists.push({ storage, capacity, fields: [...[...fields.values()].map(declare), "int32_t id;", "bool used;"], rows, nextId: initial.length + 1 });
 
-    const list: ListInfo = { name, storage, capacity, fields, slots, size };
+    const list: ListInfo = { name, storage, capacity, fields, slots, size, firmware };
     this.emitListHelpers(list);
     return list;
   }
@@ -1632,7 +1642,7 @@ class Compiler {
       cases.push(`set_${slot.id.name}(id);`, `set_${slot.used.name}(true);`, "break;");
     });
     this.program.functions.push({
-      signature: `static void ${name}_add(${params})`,
+      signature: `static int32_t ${name}_add(${params})`,
       body: [
         `static int32_t next_id = ${this.program.lists[this.program.lists.length - 1].nextId};`,
         "int32_t slot = -1;",
@@ -1653,8 +1663,57 @@ class Compiler {
         "break;",
         "}",
         `${name}_refresh_size();`,
+        "return id;",
       ],
     });
+
+    if (list.firmware) this.emitFirmwareListApi(list, params);
+  }
+
+  /** ui_<name>_add, _update, _remove and _clear: how the firmware fills one of its lists. */
+  private emitFirmwareListApi(list: ListInfo, params: string) {
+    const { name, storage, capacity, fields, slots } = list;
+    const args = [...fields.values()].map((f) => f.c).join(", ");
+    const findName = `${name}_find`;
+    this.program.functions.push({
+      signature: `static int32_t ${findName}(uint32_t id)`,
+      body: [
+        `for(int32_t i = 0; i < ${capacity}; i++) {`,
+        `if(${storage}[i].used && (uint32_t)${storage}[i].id == id) return i;`,
+        "}",
+        "return -1;",
+      ],
+    });
+    const perSlot = (lines: (slot: ListSlot) => string[]) => [
+      `switch(${findName}(id)) {`,
+      ...slots.flatMap((slot, i) => [`case ${i}:`, ...lines(slot), "break;"]),
+      "default:",
+      "break;",
+      "}",
+    ];
+    const ui = `ui_${name}`;
+    this.program.exports.push(
+      {
+        comment: `Adds an item to \`${name}\` and returns its id. When all ${capacity} slots are in use, the oldest item is replaced.`,
+        signature: `uint32_t ${ui}_add(${params})`,
+        body: [`return (uint32_t)${name}_add(${args});`],
+      },
+      {
+        comment: "Changes every field of the item with this id. Does nothing if there's no such item.",
+        signature: `void ${ui}_update(uint32_t id${params === "void" ? "" : `, ${params}`})`,
+        body: perSlot((slot) => [...fields.keys()].map((field) => `set_${slot.fields.get(field)!.name}(${fields.get(field)!.c});`)),
+      },
+      {
+        comment: "Removes the item with this id.",
+        signature: `void ${ui}_remove(uint32_t id)`,
+        body: [...perSlot((slot) => [`set_${slot.used.name}(false);`]), `${name}_refresh_size();`],
+      },
+      {
+        comment: "Removes every item.",
+        signature: `void ${ui}_clear(void)`,
+        body: [...slots.map((slot) => `set_${slot.used.name}(false);`), `${name}_refresh_size();`],
+      },
+    );
   }
 
   private itemSlot(node: t.Node, scope: Scope, module: Module): number {
@@ -1670,6 +1729,9 @@ class Compiler {
     const list = this.listOf(callee.object, scope, module);
     if (!list) return false;
     const method = callee.property.name;
+    if (list.firmware) {
+      this.fail(n, module, `The firmware fills \`${list.name}\`, so the UI can't change it. Call an action and let the firmware update the list.`);
+    }
 
     const numberOrString = (node: t.Node, value: ValueInfo): string => {
       const e = this.expr(node, scope, module);

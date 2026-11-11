@@ -67,3 +67,5 @@ export const Match = SolidMatch as unknown as <T>(props: {
 }) => JSX.Element;
 export { createList, type ListFields, type ListItem, type ListOptions, type ListValues, type RippelList } from "./list.js";
 export type { ImageAsset } from "./jsx-runtime.js";
+/** The item type of a list, like `ItemOf<typeof networks>`. */
+export type ItemOf<L extends { items(): unknown[] }> = ReturnType<L["items"]>[number];

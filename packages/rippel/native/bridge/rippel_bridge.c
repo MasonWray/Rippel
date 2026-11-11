@@ -95,7 +95,11 @@ void rp_obj_delete(lv_obj_t * obj)
 
 void rp_obj_set_parent(lv_obj_t * obj, lv_obj_t * parent, int32_t index)
 {
-    if(lv_obj_get_parent(obj) != parent) lv_obj_set_parent(obj, parent);
+    if(lv_obj_get_parent(obj) != parent) {
+        /* lv_obj_set_parent only redraws the object where it lands, so redraw where it was too. */
+        lv_obj_invalidate(obj);
+        lv_obj_set_parent(obj, parent);
+    }
     if(index >= 0) lv_obj_move_to_index(obj, index);
     else lv_obj_move_to_index(obj, (int32_t)lv_obj_get_child_count(parent) - 1);
 }

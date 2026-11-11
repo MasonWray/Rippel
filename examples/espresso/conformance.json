@@ -31,9 +31,18 @@
   {"name": "shot 2 in history", "signal": "phase", "value": 0},
   {"name": "back to brew", "touch": [22, 64]},
   {"name": "open settings", "touch": [22, 152]},
-  {"name": "turn on eco mode", "touch": [434, 72]},
-  {"name": "untick the beep", "touch": [100, 136]},
-  {"name": "open the units dropdown", "touch": [396, 200]},
-  {"name": "pick Fahrenheit", "touch": [390, 270]},
-  {"name": "brew screen shows Fahrenheit and eco mode", "touch": [22, 64]}
+  {"name": "turn on eco mode", "touch": [434, 66]},
+  {"name": "untick the beep", "touch": [100, 122]},
+  {"name": "open the units dropdown", "touch": [396, 178]},
+  {"name": "pick Fahrenheit", "touch": [390, 248]},
+  {"name": "brew screen shows Fahrenheit and eco mode", "touch": [22, 64]},
+  {"name": "settings again", "touch": [22, 152]},
+  {"name": "scan finds networks", "list": "wifiNetworks", "add": {"ssid": "Kitchen", "rssi": -48, "secure": true}},
+  {"name": "second network", "list": "wifiNetworks", "add": {"ssid": "Cafe Guest", "rssi": -61, "secure": false}},
+  {"name": "third network", "list": "wifiNetworks", "add": {"ssid": "Upstairs", "rssi": -67, "secure": true}, "quiet": true},
+  {"name": "signal changes reorder the list", "list": "wifiNetworks", "update": {"id": 3, "ssid": "Upstairs", "rssi": -40, "secure": true}},
+  {"name": "tap a network", "touch": [240, 254], "quiet": true},
+  {"name": "connected", "signal": "wifiSsid", "value": "Upstairs"},
+  {"name": "a network disappears", "list": "wifiNetworks", "remove": 2, "quiet": true},
+  {"name": "scan clears", "list": "wifiNetworks", "clear": true}
 ]
