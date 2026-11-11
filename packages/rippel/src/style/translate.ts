@@ -378,6 +378,7 @@ const HANDLERS: Record<string, Handler> = {
     emitColor(out, "LV_STYLE_SHADOW_COLOR", "LV_STYLE_SHADOW_OPA", color ?? "black");
   },
 
+  "image-recolor": colorProp("LV_STYLE_IMAGE_RECOLOR", "LV_STYLE_IMAGE_RECOLOR_OPA"),
   "arc-color": colorProp("LV_STYLE_ARC_COLOR", "LV_STYLE_ARC_OPA"),
   "arc-width": lengthProp("LV_STYLE_ARC_WIDTH", {}),
   transition: (value, out) => parseTransition(value, out),

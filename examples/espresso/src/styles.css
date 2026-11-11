@@ -163,6 +163,23 @@
   background: #20232b;
 }
 
+.recipe-head {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.card-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .recipe-name {
   font-size: 14px;
 }

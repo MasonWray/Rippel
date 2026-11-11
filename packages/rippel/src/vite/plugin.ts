@@ -12,6 +12,7 @@ import { codeFrameColumns } from "@babel/code-frame";
 import solid from "vite-plugin-solid";
 import { normalizePath, type Plugin, type PluginOption } from "vite";
 import { buildFont } from "../node/fonts.js";
+import { convertImage } from "../node/images.js";
 import { clientConfig, FONT_URL_PREFIX, styleContext, type ResolvedConfig } from "../node/load-config.js";
 import { validateSource } from "../node/validator.js";
 import { compileStyleSheet } from "../style/css.js";
@@ -21,6 +22,7 @@ const RESOLVED_CLIENT_ID = "\0rippel:client";
 const STYLE_PREFIX = "\0rippel-style:";
 // Suffix keeps Vite's own CSS pipeline from claiming the module.
 const STYLE_SUFFIX = ".rippel.js";
+const IMAGE_PREFIX = "\0rippel-image:";
 
 const SHELL_HTML = `<!doctype html>
 <html lang="en">
@@ -100,6 +102,10 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
 
     resolveId(source, importer) {
       if (source === CLIENT_ID) return RESOLVED_CLIENT_ID;
+      if (importer && /\.png$/i.test(source) && !importer.startsWith("\0")) {
+        const file = normalizePath(resolve(dirname(importer), source));
+        if (isUserFile(file, root)) return IMAGE_PREFIX + file + STYLE_SUFFIX;
+      }
       if (importer && source.endsWith(".css") && !importer.startsWith("\0")) {
         const file = normalizePath(resolve(dirname(importer), source));
         if (isUserFile(file, root)) return STYLE_PREFIX + file + STYLE_SUFFIX;
@@ -124,6 +130,12 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
           `  loadMock: ${loadMock},`,
           `});`,
         ].join("\n");
+      }
+      if (id.startsWith(IMAGE_PREFIX)) {
+        const file = id.slice(IMAGE_PREFIX.length, -STYLE_SUFFIX.length);
+        this.addWatchFile(file);
+        const { width, height, stride, format, data } = await convertImage(file, config.display.colorFormat);
+        return `export default ${JSON.stringify({ kind: "image", width, height, stride, format, data: data.toString("base64") })};`;
       }
       if (id.startsWith(STYLE_PREFIX)) {
         const file = id.slice(STYLE_PREFIX.length, -STYLE_SUFFIX.length);
@@ -154,8 +166,9 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
     },
 
     handleHotUpdate({ file, server }) {
-      if (!file.endsWith(".css")) return undefined;
-      const mod = server.moduleGraph.getModuleById(STYLE_PREFIX + normalizePath(file) + STYLE_SUFFIX);
+      if (!file.endsWith(".css") && !/\.png$/i.test(file)) return undefined;
+      const prefix = file.endsWith(".css") ? STYLE_PREFIX : IMAGE_PREFIX;
+      const mod = server.moduleGraph.getModuleById(prefix + normalizePath(file) + STYLE_SUFFIX);
       if (!mod) return undefined;
       server.moduleGraph.invalidateModule(mod);
       return [mod];

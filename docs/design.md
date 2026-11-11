@@ -50,7 +50,7 @@ Elements use LVGL widget names, not HTML names, so nobody expects arbitrary HTML
 
 Touches pass through a plain `view` to whatever is behind it, unless it has an event handler or the `scroll` prop. A `view` doesn't scroll unless it has `scroll`.
 
-Elements so far: `view`, `label`, `button`, `slider`, `arc`, `bar`. Later: `image`, `switch`, `checkbox`, `dropdown`, `textarea`, `chart`, `tabview`, and so on.
+Elements so far: `view`, `label`, `button`, `slider`, `arc`, `bar`, `image`. Later: `switch`, `checkbox`, `dropdown`, `textarea`, `chart`, `tabview`, and so on.
 
 ### Reactivity
 
@@ -249,6 +249,7 @@ Notes from bringing it up on the board:
 - **Local string signals** hold pointers to string literals.
 - **Branch state:** local signals inside a `<Show>` or `<Switch>` branch reset when it reopens, as they do in the dev runtime.
 - **`createList`** holds records that change at runtime. It takes a fixed `capacity` and field types from the contract, like `{ rating: u8, name: str(16) }`, so storage is reserved at build time and strings have a known size. The device builds one row per slot up front, shows the slots in use, and moves rows when the order changes. Adding to a full list drops the oldest item.
+- **Images** come from importing a `.png` and passing it to `<image src>`. They're converted to the display's pixel format at build time and stored in flash, as RGB565, or RGB565A8 when they have transparency. `src` can change at runtime between images known at build time. `image-recolor` tints an image, and `fit` scales it, which costs CPU on every redraw.
 - `output.lvglHeapKB` sets LVGL's memory. Every branch is built up front, so a UI with several screens needs more than one screen's worth.
 
 Still to come:

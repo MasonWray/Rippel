@@ -8,7 +8,7 @@ import type { ColorFormat } from "../displays.js";
 export type Ptr = number;
 
 /** Widget type ids. Must match rp_widget_t in rippel_bridge.h. */
-export const WIDGET = { view: 0, label: 1, button: 2, slider: 3, arc: 4, bar: 5 } as const;
+export const WIDGET = { view: 0, label: 1, button: 2, slider: 3, arc: 4, bar: 5, image: 6 } as const;
 export type WidgetType = keyof typeof WIDGET;
 
 /** Event ids. Must match rp_event_t in rippel_bridge.h. */
@@ -59,6 +59,10 @@ export interface Lvgl {
   barSetRange(obj: Ptr, min: number, max: number): void;
   barSetValue(obj: Ptr, value: number): void;
   viewSetScroll(obj: Ptr, scroll: boolean): void;
+  imageSetSrc(obj: Ptr, src: Ptr): void;
+  imageSetFit(obj: Ptr, fit: number): void;
+  /** Copies decoded pixels into WASM memory and returns an image descriptor. It is never freed. */
+  imageCreate(width: number, height: number, format: number, stride: number, pixels: Uint8Array): Ptr;
   styleCreate(): Ptr;
   styleDestroy(style: Ptr): void;
   styleSetNum(style: Ptr, prop: number, value: number): void;
@@ -149,6 +153,13 @@ export async function loadLvgl(): Promise<Lvgl> {
     barSetRange: (obj, min, max) => void m._rp_bar_set_range(obj, min, max),
     barSetValue: (obj, value) => void m._rp_bar_set_value(obj, value),
     viewSetScroll: (obj, scroll) => void m._rp_view_set_scroll(obj, scroll ? 1 : 0),
+    imageSetSrc: (obj, src) => void m._rp_image_set_src(obj, src),
+    imageSetFit: (obj, fit) => void m._rp_image_set_fit(obj, fit),
+    imageCreate(width, height, format, stride, pixels) {
+      const ptr = m._malloc(pixels.length);
+      m.HEAPU8.set(pixels, ptr);
+      return m._rp_image_dsc_create(width, height, format, stride, ptr, pixels.length);
+    },
     styleCreate: () => m._rp_style_create(),
     styleDestroy: (style) => void m._rp_style_destroy(style),
     styleSetNum: (style, prop, value) => void m._rp_style_set_num(style, prop, value),

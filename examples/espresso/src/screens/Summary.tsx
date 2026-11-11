@@ -14,7 +14,10 @@ export function Summary() {
     <view class="screen">
       <view class="row-between">
         <label class="title">Shot complete</label>
-        <label class={`recipe-title text-${accent()}`}>{recipe().name}</label>
+        <view class="title-row">
+          <image class={`tint-${accent()}`} src={recipe().icon} />
+          <label class={`recipe-title text-${accent()}`}>{recipe().name}</label>
+        </view>
       </view>
 
       <view class="stats">

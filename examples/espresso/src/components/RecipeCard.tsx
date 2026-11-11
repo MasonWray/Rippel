@@ -10,7 +10,10 @@ export function RecipeCard(props: { recipe: Recipe }) {
 
   return (
     <view class={`recipe edge-${recipe.accent}`} checked={recipeIndex() === index} onClick={() => selectRecipe(index)}>
-      <label class="recipe-name">{recipe.name}</label>
+      <view class="recipe-head">
+        <image class={`card-icon tint-${recipe.accent}`} src={recipe.icon} fit="contain" />
+        <label class="recipe-name">{recipe.name}</label>
+      </view>
       <view class="spark-row">
         <For each={SPARK}>
           {(t) => (

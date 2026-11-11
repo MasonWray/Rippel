@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { convertImage } from "../node/images.js";
 import type { ResolvedConfig, ResolvedFont } from "../node/load-config.js";
 import { styleContext } from "../node/load-config.js";
 import { compileStyleSheet } from "../style/css.js";
@@ -111,7 +112,8 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
   const out: string[] = [BANNER, '#include "ui.h"', '#include "rippel_bridge.h"', "#include <math.h>", "#include <stdio.h>", "#include <string.h>", ""];
 
   for (const font of customFonts) out.push(`LV_FONT_DECLARE(${font});`);
-  if (customFonts.length) out.push("");
+  for (const symbol of program.images.values()) out.push(`LV_IMAGE_DECLARE(${symbol});`);
+  if (customFonts.length || program.images.size) out.push("");
 
   out.push("/* Styles */", ...styleDecls, "");
 
@@ -208,6 +210,7 @@ function emitLvConf(config: ResolvedConfig, program: UiProgram, builtinSizes: Se
   add("button", "BUTTON");
   add("arc", "ARC");
   add("bar", "BAR");
+  add("image", "IMAGE");
   if (program.usedWidgets.has("slider")) {
     used.add("SLIDER");
     used.add("BAR");
@@ -271,6 +274,33 @@ async function emitFont(font: ResolvedFont, size: number, symbol: string, outDir
   await writeFile(out, text.replace(/^ \* Opts:.*$/m, ` * Size ${size}, ${font.bpp} bpp, range ${font.range}`));
 }
 
+async function emitImage(file: string, symbol: string, config: ResolvedConfig, outDir: string): Promise<number> {
+  const image = await convertImage(file, config.display.colorFormat);
+  const rows: string[] = [];
+  for (let i = 0; i < image.data.length; i += 16) {
+    rows.push("    " + [...image.data.subarray(i, i + 16)].map((b) => `0x${b.toString(16).padStart(2, "0")}`).join(", ") + ",");
+  }
+  await writeFile(
+    join(outDir, `${symbol}.c`),
+    [
+      BANNER,
+      '#include "lvgl.h"',
+      "",
+      `static const uint8_t ${symbol}_map[] = {`,
+      ...rows,
+      "};",
+      "",
+      `const lv_image_dsc_t ${symbol} = {`,
+      `    .header = { .magic = LV_IMAGE_HEADER_MAGIC, .cf = ${image.format}, .w = ${image.width}, .h = ${image.height}, .stride = ${image.stride} },`,
+      `    .data_size = sizeof(${symbol}_map),`,
+      `    .data = ${symbol}_map,`,
+      "};",
+      "",
+    ].join("\n"),
+  );
+  return image.data.length;
+}
+
 function emitCMake(config: ResolvedConfig, files: string[]): string {
   const sources = files.map((f) => `    "${f}"`).join("\n");
   if (config.output?.integration === "esp-idf") {
@@ -307,6 +337,8 @@ export interface BuildResult {
   outDir: string;
   files: string[];
   warnings: string[];
+  /** Flash used by each image's pixels. */
+  images: { file: string; bytes: number }[];
 }
 
 /** Rules in cascade order, from stylesheets in the order the app imports them. */
@@ -372,10 +404,15 @@ export async function buildProject(config: ResolvedConfig, outDirOverride?: stri
   await copyFile(join(nativeDir, "bridge", "rippel_bridge.h"), join(outDir, "rippel_bridge.h"));
   for (const f of customFonts) await emitFont(f.font, f.size, f.symbol, outDir);
 
-  const sources = ["ui.c", "rippel_bridge.c", ...customFonts.map((f) => `${f.symbol}.c`)];
+  const images: BuildResult["images"] = [];
+  for (const [file, symbol] of program.images) {
+    images.push({ file, bytes: await emitImage(file, symbol, config, outDir) });
+  }
+
+  const sources = ["ui.c", "rippel_bridge.c", ...customFonts.map((f) => `${f.symbol}.c`), ...[...program.images.values()].map((s) => `${s}.c`)];
   await writeFile(join(outDir, "CMakeLists.txt"), emitCMake(config, sources));
 
-  return { outDir, files: [...sources, "ui.h", "rippel_bridge.h", "lv_conf.h", "CMakeLists.txt"], warnings: program.warnings };
+  return { outDir, files: [...sources, "ui.h", "rippel_bridge.h", "lv_conf.h", "CMakeLists.txt"], warnings: program.warnings, images };
 }
 
 export type { Action };
