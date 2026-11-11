@@ -1,7 +1,8 @@
 /** State shared across screens. One signal per fact; everything else is derived. */
-import { batch, createSignal } from "rippel";
+import { batch, createList, createSignal, type ListItem } from "rippel";
+import { f32, u8 } from "rippel/contract";
 import { ackShot, boilerC, elapsedDs, phase, pressureBar, setBoilerTarget, startShot, waterPct, weightG } from "./firmware.contract";
-import { RECIPES, type Recipe } from "./recipes";
+import { RECIPES } from "./recipes";
 
 export const PHASE = { idle: 0, preinfuse: 1, ramp: 2, extract: 3, done: 4 };
 
@@ -64,32 +65,23 @@ export function beginShot() {
   startShot({ recipe: recipeIndex(), yieldG: targetYieldG() });
 }
 
-// Shot history
+// Shot history. The capacity is fixed, so the device reserves room for it up front.
 
-export interface Shot {
-  id: number;
-  recipe: Recipe;
-  doseG: number;
-  yieldG: number;
-  seconds: number;
-  rating: () => number;
-  setRating: (value: number) => void;
-}
+const SHOT_FIELDS = { recipe: u8, doseG: f32, yieldG: f32, seconds: f32, rating: u8 };
 
-let nextShotId = 1;
+export type Shot = ListItem<typeof SHOT_FIELDS>;
 
-function makeShot(recipe: Recipe, doseG: number, yieldG: number, seconds: number, initialRating: number): Shot {
-  const [rating, setRating] = createSignal(initialRating);
-  return { id: nextShotId++, recipe, doseG, yieldG, seconds, rating, setRating };
-}
-
-export const [shots, setShots] = createSignal<Shot[]>([
-  makeShot(RECIPES[3], 15, 45, 18.2, 3),
-  makeShot(RECIPES[1], 18, 45, 32.4, 5),
-  makeShot(RECIPES[0], 18, 36, 27.8, 4),
-  makeShot(RECIPES[2], 17, 37.4, 25.9, 2),
-  makeShot(RECIPES[0], 18.5, 37, 29.1, 3),
-]);
+export const shots = createList({
+  capacity: 12,
+  fields: SHOT_FIELDS,
+  initial: [
+    { recipe: 0, doseG: 18.5, yieldG: 37, seconds: 29.1, rating: 3 },
+    { recipe: 2, doseG: 17, yieldG: 37.4, seconds: 25.9, rating: 2 },
+    { recipe: 0, doseG: 18, yieldG: 36, seconds: 27.8, rating: 4 },
+    { recipe: 1, doseG: 18, yieldG: 45, seconds: 32.4, rating: 5 },
+    { recipe: 3, doseG: 15, yieldG: 45, seconds: 18.2, rating: 3 },
+  ],
+});
 
 export const SORTS = [
   { key: "newest", label: "Newest" },
@@ -99,22 +91,17 @@ export const SORTS = [
 
 export const [sortKey, setSortKey] = createSignal("newest");
 
-export function sortedShots(): Shot[] {
-  const list = [...shots()];
-  if (sortKey() === "best") return list.sort((a, b) => b.rating() - a.rating() || b.id - a.id);
-  if (sortKey() === "fastest") return list.sort((a, b) => a.seconds - b.seconds);
-  return list.sort((a, b) => b.id - a.id);
-}
-
-export function deleteShot(shot: Shot) {
-  setShots(shots().filter((s) => s !== shot));
-}
+export const sortedShots = () =>
+  shots.sorted((a, b) => {
+    if (sortKey() === "best" && a.rating !== b.rating) return b.rating - a.rating;
+    if (sortKey() === "fastest") return a.seconds - b.seconds;
+    return b.id - a.id;
+  });
 
 /** Files the finished shot and returns the machine to idle. */
 export function saveFinishedShot(rating: number) {
-  const shot = makeShot(recipe(), doseTenths() / 10, weightG(), elapsedDs() / 10, rating);
+  shots.add({ recipe: recipeIndex(), doseG: doseTenths() / 10, yieldG: weightG(), seconds: elapsedDs() / 10, rating });
   batch(() => {
-    setShots([...shots(), shot]);
     setSortKey("newest");
     setTab("history");
   });

@@ -18,7 +18,7 @@ import type { ResolvedConfig, ResolvedFont } from "../node/load-config.js";
 import { styleContext } from "../node/load-config.js";
 import { compileStyleSheet } from "../style/css.js";
 import type { StyleRule } from "../style/ir.js";
-import { compileUi, cssImportOrder, widgetEnum, type Action, type Obj, type Signal, type UiProgram, type ValueInfo, type Widget } from "./compile.js";
+import { compileUi, cssImportOrder, sigRef, widgetEnum, type Action, type Obj, type Signal, type UiProgram, type ValueInfo, type Widget } from "./compile.js";
 import { emitStyles, fontSymbol, type EmittedRule } from "./styles.js";
 
 const run = promisify(execFile);
@@ -37,14 +37,15 @@ function signalDecl(signal: Signal): string {
 }
 
 function setterBody(signal: Signal): string[] {
+  const ref = sigRef(signal);
   const lines =
     signal.value.base === "string"
       ? [
-          `    if(strcmp(sig_${signal.name}, value) == 0) return;`,
+          `    if(strcmp(${ref}, value) == 0) return;`,
           // Local string signals only ever hold literals, so they keep the pointer.
-          signal.kind === "local" ? `    sig_${signal.name} = value;` : `    lv_strlcpy(sig_${signal.name}, value, sizeof(sig_${signal.name}));`,
+          signal.kind === "local" ? `    ${ref} = value;` : `    lv_strlcpy(${ref}, value, sizeof(${ref}));`,
         ]
-      : [`    if(sig_${signal.name} == value) return;`, `    sig_${signal.name} = value;`];
+      : [`    if(${ref} == value) return;`, `    ${ref} = value;`];
   return [...lines, ...signal.binds.map((b) => `    ${b.name}();`)];
 }
 
@@ -105,7 +106,8 @@ function functionBlock(signature: string, body: string[]): string[] {
 
 function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[], customFonts: string[], dpi: number, handles: Obj[]): string {
   const firmware = program.signals.filter((s) => s.kind === "firmware");
-  const local = program.signals.filter((s) => s.kind === "local");
+  // List fields live in their list's storage, but get setters like local signals.
+  const local = program.signals.filter((s) => s.kind !== "firmware");
   const out: string[] = [BANNER, '#include "ui.h"', '#include "rippel_bridge.h"', "#include <math.h>", "#include <stdio.h>", "#include <string.h>", ""];
 
   for (const font of customFonts) out.push(`LV_FONT_DECLARE(${font});`);
@@ -121,8 +123,16 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
 
   if (program.signals.length) {
     out.push("/* Signals */");
-    for (const s of program.signals) out.push(signalDecl(s));
+    for (const s of program.signals) if (s.kind !== "list") out.push(signalDecl(s));
     out.push("");
+  }
+
+  for (const list of program.lists) {
+    out.push(`/* ${list.storage}: fixed capacity, so its memory use is known at build time */`, "typedef struct {");
+    for (const field of list.fields) out.push(`    ${field}`);
+    out.push(`} ${list.storage}_item_t;`, `static ${list.storage}_item_t ${list.storage}[${list.capacity}] = {`);
+    for (const row of list.rows) out.push(`    ${row},`);
+    out.push("};", "");
   }
   if (program.actions.length) out.push("static ui_actions_t actions;", "");
 
@@ -134,13 +144,18 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
   }
 
   for (const s of local) out.push(`static void set_${s.name}(${paramType(s.value)} value);`);
+  for (const f of program.functions) out.push(`${f.signature};`);
   if (local.length) out.push("");
+  if (program.declarations.length) out.push(...program.declarations, "");
 
   out.push("/* Bindings: each re-evaluates one expression in the UI */", "");
   for (const bind of program.binds) out.push(...functionBlock(`static void ${bind.name}(void)`, bind.body));
 
   if (local.length) out.push("/* Local signals */", "");
   for (const s of local) out.push(...[`static void set_${s.name}(${paramType(s.value)} value)`, "{", ...setterBody(s), "}", ""]);
+
+  if (program.functions.length) out.push("/* List helpers */", "");
+  for (const f of program.functions) out.push(...functionBlock(f.signature, f.body));
 
   if (program.handlers.length) out.push("/* Event handlers */", "");
   for (const h of program.handlers) {
