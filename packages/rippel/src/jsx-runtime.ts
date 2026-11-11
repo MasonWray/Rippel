@@ -53,7 +53,11 @@ export namespace JSX {
 
   export interface IntrinsicElements {
     /** A plain container, like a div. No default styling, sized to its content. */
-    view: CommonProps & { children?: Element };
+    view: CommonProps & {
+      children?: Element;
+      /** Lets the user drag to scroll content that overflows. */
+      scroll?: boolean;
+    };
     /** Text. Children must be text or expressions. */
     label: CommonProps & { children?: Element };
     /** A pressable button. Text children are shown in a centered label. */
@@ -66,6 +70,24 @@ export namespace JSX {
       onInput?: (value: number) => void;
       /** Fires when the user releases the slider. */
       onChange?: (value: number) => void;
+    };
+    /** A circular dial. Style the track with `arc-color` and `arc-width`, and the fill with `::indicator`. */
+    arc: CommonProps & {
+      min?: number;
+      max?: number;
+      value?: number;
+      /** Shows the arc as a gauge: no knob, ignores touch. */
+      readonly?: boolean;
+      /** Can hold other elements, centered with flex. */
+      children?: Element;
+      onInput?: (value: number) => void;
+      onChange?: (value: number) => void;
+    };
+    /** A progress bar. Style the fill with `::indicator`. */
+    bar: CommonProps & {
+      min?: number;
+      max?: number;
+      value?: number;
     };
   }
 }

@@ -1,0 +1,35 @@
+/* Each recipe has an accent color, applied by class. */
+
+.fill-amber { background: #f5a524; }
+.text-amber { color: #f5a524; }
+.arc-amber::indicator { arc-color: #f5a524; }
+.bar-amber::indicator { background: #f5a524; }
+.slider-amber::indicator { background: #f5a524; }
+.edge-amber:checked { border-color: #f5a524; }
+.step-amber:checked { background: #f5a524; color: #15171c; }
+
+.fill-teal { background: #2dd4bf; }
+.text-teal { color: #2dd4bf; }
+.arc-teal::indicator { arc-color: #2dd4bf; }
+.bar-teal::indicator { background: #2dd4bf; }
+.slider-teal::indicator { background: #2dd4bf; }
+.edge-teal:checked { border-color: #2dd4bf; }
+.step-teal:checked { background: #2dd4bf; color: #15171c; }
+
+.fill-rose { background: #fb7185; }
+.text-rose { color: #fb7185; }
+.arc-rose::indicator { arc-color: #fb7185; }
+.bar-rose::indicator { background: #fb7185; }
+.slider-rose::indicator { background: #fb7185; }
+.edge-rose:checked { border-color: #fb7185; }
+.step-rose:checked { background: #fb7185; color: #15171c; }
+
+.fill-violet { background: #a78bfa; }
+.text-violet { color: #a78bfa; }
+.arc-violet::indicator { arc-color: #a78bfa; }
+.bar-violet::indicator { background: #a78bfa; }
+.slider-violet::indicator { background: #a78bfa; }
+.edge-violet:checked { border-color: #a78bfa; }
+.step-violet:checked { background: #a78bfa; color: #15171c; }
+
+.text-warn { color: #f97316; }

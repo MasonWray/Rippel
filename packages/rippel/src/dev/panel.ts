@@ -9,22 +9,31 @@ function signalControl(meta: SignalMeta): HTMLElement {
   const { type } = meta;
   const id = `signal-${meta.name}`;
   let current = meta.initial;
-  const set = (value: unknown) => {
-    current = coerce(type, value);
-    meta.set(current);
+  const set = (value: unknown) => meta.set(coerce(type, value));
+  /** Keeps a control in step with the signal, unless the user is editing it. */
+  const follow = (update: (value: typeof current) => void, control: HTMLElement) => {
+    meta.listeners.add((value) => {
+      current = value;
+      if (document.activeElement !== control) update(value);
+    });
   };
 
   if (type.kind === "bool") {
     const input = h("input", { type: "checkbox", id, "aria-label": meta.name, checked: Boolean(current) });
     input.addEventListener("change", () => set(input.checked));
+    follow((value) => (input.checked = Boolean(value)), input);
     return input;
   }
 
   if (type.kind === "string") {
     const input = h("input", { type: "text", id, "aria-label": meta.name, value: String(current), maxLength: type.maxLength });
     input.addEventListener("input", () => set(input.value));
+    follow((value) => (input.value = String(value)), input);
     return input;
   }
+
+  // f32 values have rounding noise, so show two decimals at most.
+  const show = (value: typeof current) => String(Math.round(Number(value) * 100) / 100);
 
   // Numbers: a number box, plus a slider when the type's range is small enough to scrub.
   const isInt = type.kind === "int";
@@ -32,7 +41,7 @@ function signalControl(meta: SignalMeta): HTMLElement {
     type: "number",
     id,
     "aria-label": meta.name,
-    value: String(current),
+    value: show(current),
     step: isInt ? 1 : 0.1,
     min: isInt ? type.min : undefined,
     max: isInt ? type.max : undefined,
@@ -41,18 +50,16 @@ function signalControl(meta: SignalMeta): HTMLElement {
   let range: HTMLInputElement | undefined;
   if (isInt && type.max - type.min <= 1000) {
     range = h("input", { type: "range", "aria-label": `${meta.name} slider`, min: type.min, max: type.max, step: 1, value: String(current) });
-    range.addEventListener("input", () => {
-      set(range!.value);
-      input.value = String(current);
-    });
+    range.addEventListener("input", () => set(range!.value));
+    follow((value) => (range!.value = String(value)), range);
     wrap.prepend(range);
   }
   input.addEventListener("input", () => {
     if (input.value === "" || input.value === "-") return;
     set(input.value);
-    if (range) range.value = String(current);
   });
-  input.addEventListener("blur", () => (input.value = String(current)));
+  input.addEventListener("blur", () => (input.value = show(current)));
+  follow((value) => (input.value = show(value)), input);
   return wrap;
 }
 

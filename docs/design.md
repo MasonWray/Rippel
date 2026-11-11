@@ -48,7 +48,9 @@ The **bridge** is the main design seam. It's a small set of operations: create a
 
 Elements use LVGL widget names, not HTML names, so nobody expects arbitrary HTML to work. They are typed intrinsic elements, so the editor autocompletes them and rejects anything unknown.
 
-v0 elements: `view`, `label`, `button`, `slider`. Later: `image`, `arc`, `bar`, `switch`, `checkbox`, `dropdown`, `textarea`, `chart`, `tabview`, and so on.
+Touches pass through a plain `view` to whatever is behind it, unless it has an event handler or the `scroll` prop. A `view` doesn't scroll unless it has `scroll`.
+
+Elements so far: `view`, `label`, `button`, `slider`, `arc`, `bar`. Later: `image`, `switch`, `checkbox`, `dropdown`, `textarea`, `chart`, `tabview`, and so on.
 
 ### Reactivity
 
@@ -64,6 +66,9 @@ A CSS subset that maps directly onto LVGL styles:
 - `display: flex` maps to LVGL's flex layout. Grid comes later.
 - Units: `px`, `%` and `rem` (resolved at compile time). `em` is rejected, since there is no font-size cascade to resolve it against.
 - Colors always set their matching opacity property too, so `background` works on unstyled views.
+- `transition` maps to LVGL style transitions. They run when a state changes (`:active`, `:checked`, `:disabled`), not when a class changes. LVGL has one duration, delay and easing per transition, and needs the properties listed, so `all` is an error.
+- A `:disabled` rule turns off the grey tint LVGL's theme adds, so the colors you write are the colors you get.
+- `align-items` also places the flex track, so a single line aligns against the whole container as it does in CSS.
 - Fonts are chosen by `font-family` and `font-size` together and must exist in the font catalog: built-in Montserrat sizes plus fonts from `rippel.config.ts`.
 - Anything unsupported is a build error with a clear message, never silently ignored.
 
@@ -105,6 +110,8 @@ void ui_set_actions(const ui_actions_t *actions);
 Firmware calls the setters and implements the actions in its own files. Generated files never contain user code.
 
 In dev, the contract also drives a **firmware mock panel**: a control for every signal and a log of every action call.
+
+A project can also add `src/firmware.mock.ts`, a script that plays the firmware in the simulator using `defineMock` from `rippel/mock`. It pushes signals and answers actions on a timer. It only runs in the browser and is never compiled for the device, so the subset validator skips it and it can use any JavaScript.
 
 ## Project shape and configuration
 

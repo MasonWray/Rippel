@@ -49,6 +49,8 @@ export interface SignalMeta<T extends ValueType = ValueType> {
   name?: string;
   /** Sets the value, as the firmware would. Not available to UI code. */
   set(value: ValueOf<T>): void;
+  /** Dev shell: called after every set, whoever made it. */
+  readonly listeners: Set<(value: ValueOf<T>) => void>;
 }
 
 export interface ActionMeta<P extends Record<string, ValueType> = Record<string, ValueType>> {
@@ -99,7 +101,12 @@ export function signal<T extends ValueType>(type: T, options: { initial?: ValueO
     kind: "signal",
     type,
     initial,
-    set: (value) => set(() => coerce(type, value)),
+    set(value) {
+      const next = coerce(type, value);
+      set(() => next);
+      for (const listener of meta.listeners) listener(next);
+    },
+    listeners: new Set(),
   };
   return Object.assign(read, { [META]: meta });
 }
@@ -108,6 +115,8 @@ export interface ActionCall {
   name: string;
   args: Record<string, unknown>;
   time: number;
+  /** Which action was called. */
+  meta: ActionMeta;
 }
 
 const actionListeners = new Set<(call: ActionCall) => void>();
@@ -117,7 +126,7 @@ export function action<P extends Record<string, ValueType>>(params: P): Firmware
   const call = (args: { [K in keyof P]: ValueOf<P[K]> }) => {
     const coerced: Record<string, unknown> = {};
     for (const [key, type] of Object.entries(params)) coerced[key] = coerce(type, args[key]);
-    const record = { name: meta.name ?? "(unnamed action)", args: coerced, time: Date.now() };
+    const record = { name: meta.name ?? "(unnamed action)", args: coerced, time: Date.now(), meta: meta as ActionMeta };
     for (const listener of actionListeners) listener(record);
   };
   return Object.assign(call, { [META]: meta });

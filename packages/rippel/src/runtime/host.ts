@@ -61,5 +61,6 @@ export function resolveValue(lv: Lvgl, value: StyleValue): ResolvedValue {
     case "const": return { kind: "num", v: lv.constant(value.v) };
     case "color": return { kind: "color", v: value.v };
     case "font": return { kind: "ptr", v: resolveFont(lv, value.family, value.size) };
+    case "transition": throw new Error("Transitions are set on shared styles, not as single values");
   }
 }

@@ -21,6 +21,23 @@ npm run dev
 
 If you cloned without `--recursive`, run `git submodule update --init` first. The example's custom font comes from the LVGL submodule.
 
+## See the demo
+
+`examples/espresso` is a full espresso machine UI for an 800×480 display. A scripted mock plays the firmware, so the whole thing runs on its own in the browser.
+
+```bash
+npm run demo
+```
+
+Wait for the boiler to heat up, pick a recipe and press **Start shot**. Things to try:
+
+- Switch recipes. One signal recolors the UI and updates the settings, the yield and the boiler target.
+- Watch a shot: live dials and a pressure trace drawn over the recipe's target, updating one bar at a time.
+- In History, sort by **Top rated** and change a rating. The rows reorder as you tap.
+- In the signals panel, drag `waterPct` below 15 to see the machine refuse to brew.
+
+The demo runs in the browser simulator. C code generation for the device comes in later milestones.
+
 ## What a Rippel project looks like
 
 ```
@@ -28,6 +45,7 @@ rippel.config.ts          display, MCU, fonts
 src/App.tsx               root component
 src/styles.css            styles (a subset of CSS that maps onto LVGL)
 src/firmware.contract.ts  signals the firmware pushes, actions the UI calls
+src/firmware.mock.ts      optional: a script that plays the firmware in the simulator
 ```
 
 ```tsx
@@ -61,7 +79,8 @@ packages/rippel/          the npm package
   native/sim/             browser simulator platform and its lv_conf.h
   native/lvgl/            LVGL 9.6 (git submodule)
   wasm/                   prebuilt simulator (LVGL + bridge compiled to WASM)
-examples/thermostat/      example project
+examples/thermostat/      small example project
+examples/espresso/        full demo project
 docs/design.md            design doc
 ```
 

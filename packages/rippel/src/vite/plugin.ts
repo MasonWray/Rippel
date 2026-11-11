@@ -112,12 +112,16 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
         const loadContract = config.contract
           ? `() => import(${JSON.stringify(urlFor(root, config.contract))})`
           : "undefined";
+        const loadMock = config.mock
+          ? `() => import(${JSON.stringify(urlFor(root, config.mock))})`
+          : "undefined";
         return [
           `import { startDevShell } from "rippel/dev-shell";`,
           `startDevShell({`,
           `  config: ${JSON.stringify(clientConfig(config))},`,
           `  loadApp: () => import(${JSON.stringify(urlFor(root, config.entry))}),`,
           `  loadContract: ${loadContract},`,
+          `  loadMock: ${loadMock},`,
           `});`,
         ].join("\n");
       }
@@ -137,6 +141,7 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
     transform(code, id) {
       const file = id.split("?")[0];
       if (!/\.[cm]?[jt]sx?$/.test(file) || id.startsWith("\0") || !isUserFile(file, root)) return undefined;
+      if (config.mock && file === normalizePath(config.mock)) return undefined;
       const issues = validateSource(code, file);
       if (!issues.length) return undefined;
       const first = issues[0];

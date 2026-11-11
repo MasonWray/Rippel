@@ -8,6 +8,7 @@ import { attachLvgl, registerFont } from "../runtime/host.js";
 import { createComponent, createRoot, render } from "../runtime/renderer.js";
 import { startSimulator } from "../runtime/simulator.js";
 import { setStyleContext } from "../runtime/styles.js";
+import { startMock, type Mock } from "../mock.js";
 import { h } from "./dom.js";
 import { createPanel } from "./panel.js";
 import { SHELL_CSS } from "./shell-css.js";
@@ -16,6 +17,7 @@ export interface DevShellOptions {
   config: ClientConfig;
   loadApp: () => Promise<{ default?: Component }>;
   loadContract?: () => Promise<Record<string, unknown>>;
+  loadMock?: () => Promise<{ default?: Mock }>;
 }
 
 const ZOOM_KEY = "rippel.zoom";
@@ -39,7 +41,7 @@ function saveZoom(zoom: number) {
 
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 
-export async function startDevShell({ config, loadApp, loadContract }: DevShellOptions): Promise<void> {
+export async function startDevShell({ config, loadApp, loadContract, loadMock }: DevShellOptions): Promise<void> {
   const { display } = config;
   document.head.append(h("style", {}, SHELL_CSS));
   document.title = `${display.name} · Rippel`;
@@ -132,6 +134,12 @@ export async function startDevShell({ config, loadApp, loadContract }: DevShellO
     }
     const App = app.default;
     render(() => createComponent(App as never, {}), createRoot());
+
+    if (loadMock) {
+      const mock = (await loadMock()).default;
+      if (typeof mock !== "function") throw new Error("The firmware mock must default-export defineMock(...).");
+      startMock(mock);
+    }
   } catch (err) {
     showError(err);
   }

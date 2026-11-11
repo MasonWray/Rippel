@@ -4,7 +4,7 @@
  * rippel check  Validate UI code and styles without starting a server.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { createServer } from "vite";
 import { ConfigError, loadConfig, styleContext } from "./node/load-config.js";
@@ -58,6 +58,8 @@ async function check(root: string): Promise<number> {
 
   for (const file of listFiles(srcDir)) {
     const rel = relative(root, file);
+    // The mock is dev-only JS that plays the firmware. It never reaches the device.
+    if (config.mock && resolve(file) === resolve(config.mock)) continue;
     if (/\.[cm]?[jt]sx?$/.test(file)) {
       for (const issue of validateSource(readFileSync(file, "utf8"), file)) {
         console.log(`${rel}:${issue.line}:${issue.column}  ${issue.message}`);
