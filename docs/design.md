@@ -1,6 +1,6 @@
 # Rippel design
 
-Status: draft. M1 (browser dev runtime) is done. M2 (C codegen) works in the conformance check and hasn't run on hardware yet.
+Status: draft. M1 (browser dev runtime) and M2 (C codegen) are done. Last updated 2026-11-11.
 
 Rippel is a toolchain for building embedded display UIs with web tooling. You write the UI in TSX and CSS, preview it in the browser on the real renderer, and build it into C code that runs on a microcontroller using [LVGL](https://lvgl.io).
 
@@ -222,7 +222,7 @@ Without escape hatches, people end up editing generated code. Rippel needs:
 
 **Done when:** the same sample runs on the reference board, built by `rippel build`, with no hand edits.
 
-**Status: everything but step 6.** `rippel build` generates the thermostat, and `npm run conformance` passes. How it works:
+**Status: done.** `rippel build` generates the thermostat, `npm run conformance` passes, and the result runs on an Adafruit QT Py ESP32-S3 with the Adafruit 3.5" 480×320 display, including touch, with no edits to generated code. How it works:
 
 - **Components are inlined** at each use. Nothing is evaluated at compile time, and there is no JS on the device.
 - **Each reactive JSX expression becomes one generated bind function.** A signal's setter compares the new value and calls the binds that read it. `lv_subject_t` isn't used: it only holds a few value types, and derived values need generated functions anyway.
@@ -231,6 +231,11 @@ Without escape hatches, people end up editing generated code. Rippel needs:
 - **`lv_conf.h` is generated** with only the widgets and Montserrat sizes the UI uses. `ui_init` sets the DPI after the display is created, in the same order as the simulator, so LVGL's theme scales the same way.
 - **The output folder includes the bridge**, so generated code and the simulator share `rippel_bridge.c`.
 - Anything outside the subset is a build error with a file and line.
+
+Notes from bringing it up on the board:
+
+- **Stack:** LVGL's software renderer needs more than ESP-IDF's default 3.5 KB main task stack. The thermostat peaked at about 4.7 KB. The example uses 16 KB. Projects that call `lv_timer_handler` from `app_main` need the same change.
+- **Touch calibration** belongs to the firmware. The raw edge values are measured per panel and live in `board.h`.
 
 ### M3 and later
 

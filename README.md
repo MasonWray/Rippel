@@ -4,7 +4,7 @@ Build embedded display UIs for microcontrollers with TSX and CSS. You write the 
 
 See [docs/design.md](docs/design.md) for the design and roadmap.
 
-**Status:** the browser dev runtime works. `rippel build` generates C for the subset described in the [design doc](docs/design.md), and that C matches the dev runtime pixel for pixel in the conformance check. It hasn't run on hardware yet.
+**Status:** the browser dev runtime works, and `rippel build` generates C for the subset described in the [design doc](docs/design.md). The example thermostat runs on an ESP32-S3 with a 480×320 touch display, and its generated C matches the dev runtime pixel for pixel in the conformance check.
 
 ## Try the example
 
