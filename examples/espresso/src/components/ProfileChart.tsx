@@ -2,7 +2,7 @@ import { For } from "rippel";
 import { pressureAt } from "../recipes";
 import { accent, COLUMNS, recipe, sample } from "../state";
 
-const PX_PER_BAR = 10;
+const PX_PER_BAR = 8;
 
 /** The recipe's target pressure in grey, with the live shot drawn over it. */
 export function ProfileChart() {
