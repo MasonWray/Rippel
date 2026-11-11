@@ -163,12 +163,84 @@ const TEXT_DECOR: Record<string, string> = {
   "line-through": "LV_TEXT_DECOR_STRIKETHROUGH",
 };
 
+/** CSS properties that can animate, and the LVGL properties each one animates. */
+const TRANSITION_PROPS: Record<string, string[]> = {
+  background: ["LV_STYLE_BG_COLOR", "LV_STYLE_BG_OPA"],
+  "background-color": ["LV_STYLE_BG_COLOR", "LV_STYLE_BG_OPA"],
+  color: ["LV_STYLE_TEXT_COLOR", "LV_STYLE_TEXT_OPA"],
+  opacity: ["LV_STYLE_OPA"],
+  width: ["LV_STYLE_WIDTH"],
+  height: ["LV_STYLE_HEIGHT"],
+  translate: ["LV_STYLE_TRANSLATE_X", "LV_STYLE_TRANSLATE_Y"],
+  "border-color": ["LV_STYLE_BORDER_COLOR", "LV_STYLE_BORDER_OPA"],
+  "border-width": ["LV_STYLE_BORDER_WIDTH"],
+  "outline-color": ["LV_STYLE_OUTLINE_COLOR", "LV_STYLE_OUTLINE_OPA"],
+  "outline-width": ["LV_STYLE_OUTLINE_WIDTH"],
+  "box-shadow": ["LV_STYLE_SHADOW_WIDTH", "LV_STYLE_SHADOW_COLOR", "LV_STYLE_SHADOW_OPA", "LV_STYLE_SHADOW_SPREAD"],
+  "arc-color": ["LV_STYLE_ARC_COLOR", "LV_STYLE_ARC_OPA"],
+};
+
+const TRANSITION_EASING: Record<string, string> = {
+  linear: "RP_PATH_LINEAR",
+  ease: "RP_PATH_EASE_IN_OUT",
+  "ease-in": "RP_PATH_EASE_IN",
+  "ease-out": "RP_PATH_EASE_OUT",
+  "ease-in-out": "RP_PATH_EASE_IN_OUT",
+  overshoot: "RP_PATH_OVERSHOOT",
+  bounce: "RP_PATH_BOUNCE",
+};
+
+function parseTime(token: string): number | undefined {
+  const m = /^(\d+\.?\d*|\.\d+)(ms|s)$/.exec(token.toLowerCase());
+  if (!m) return undefined;
+  return Math.round(m[2] === "s" ? Number(m[1]) * 1000 : Number(m[1]));
+}
+
+/** `transition: <property> <duration> [easing] [delay]`, comma separated. */
+function parseTransition(value: string, out: StyleDecl[]) {
+  const props: string[] = [];
+  let shared: { timeMs: number; delayMs: number; path: string } | undefined;
+
+  for (const item of value.split(",")) {
+    const [name, ...rest] = splitValue(item);
+    const lower = name?.toLowerCase();
+    if (lower === "all") {
+      throw new StyleError(`LVGL needs to know which properties animate. List them instead of "all".`);
+    }
+    const lvProps = TRANSITION_PROPS[lower ?? ""];
+    if (!lvProps) {
+      throw new StyleError(`Can't animate "${name}". Supported: ${Object.keys(TRANSITION_PROPS).join(", ")}`);
+    }
+    props.push(...lvProps);
+
+    const times: number[] = [];
+    let path = "RP_PATH_EASE_IN_OUT";
+    for (const token of rest) {
+      const time = parseTime(token);
+      if (time !== undefined) times.push(time);
+      else if (TRANSITION_EASING[token.toLowerCase()]) path = TRANSITION_EASING[token.toLowerCase()];
+      else throw new StyleError(`Unsupported easing "${token}". Supported: ${Object.keys(TRANSITION_EASING).join(", ")}`);
+    }
+    if (times.length < 1 || times.length > 2) throw new StyleError("Expected `<property> <duration> [easing] [delay]`");
+
+    const current = { timeMs: times[0], delayMs: times[1] ?? 0, path };
+    if (shared && (shared.timeMs !== current.timeMs || shared.delayMs !== current.delayMs || shared.path !== current.path)) {
+      throw new StyleError("LVGL uses one duration, delay and easing per transition. Make them the same for every property.");
+    }
+    shared = current;
+  }
+
+  out.push({ prop: "LV_STYLE_TRANSITION", value: { t: "transition", props: [...new Set(props)], ...shared! } });
+}
+
 /** Properties whose meaning depends on other declarations in the same rule. */
 interface Combined {
   fontFamily?: { value: string; index: number };
   fontSize?: { value: number; index: number };
   flexDirection?: { value: string; index: number };
   flexWrap?: { value: string; index: number };
+  alignItems?: StyleValue;
+  alignContent?: boolean;
 }
 
 type Handler = (value: string, out: StyleDecl[], ctx: StyleContext, combined: Combined, index: number) => void;
@@ -306,6 +378,10 @@ const HANDLERS: Record<string, Handler> = {
     emitColor(out, "LV_STYLE_SHADOW_COLOR", "LV_STYLE_SHADOW_OPA", color ?? "black");
   },
 
+  "arc-color": colorProp("LV_STYLE_ARC_COLOR", "LV_STYLE_ARC_OPA"),
+  "arc-width": lengthProp("LV_STYLE_ARC_WIDTH", {}),
+  transition: (value, out) => parseTransition(value, out),
+
   "font-family": (value, _out, _ctx, combined, index) => {
     const families = value.split(",").map((f) => f.trim().replace(/^["']|["']$/g, ""));
     if (families.length > 1) {
@@ -366,14 +442,18 @@ const HANDLERS: Record<string, Handler> = {
   },
   "justify-content": (value, out) =>
     out.push({ prop: "LV_STYLE_FLEX_MAIN_PLACE", value: pick(value, FLEX_ALIGN, "justify-content") }),
-  "align-items": (value, out) => {
+  "align-items": (value, out, _ctx, combined) => {
     if (value.trim().toLowerCase() === "stretch") {
       throw new StyleError(`LVGL flex can't stretch items. Use "width: 100%" or "height: 100%" on the children.`);
     }
-    out.push({ prop: "LV_STYLE_FLEX_CROSS_PLACE", value: pick(value, FLEX_CROSS_ALIGN, "align-items") });
+    const place = pick(value, FLEX_CROSS_ALIGN, "align-items");
+    out.push({ prop: "LV_STYLE_FLEX_CROSS_PLACE", value: place });
+    combined.alignItems = place;
   },
-  "align-content": (value, out) =>
-    out.push({ prop: "LV_STYLE_FLEX_TRACK_PLACE", value: pick(value, FLEX_ALIGN, "align-content") }),
+  "align-content": (value, out, _ctx, combined) => {
+    out.push({ prop: "LV_STYLE_FLEX_TRACK_PLACE", value: pick(value, FLEX_ALIGN, "align-content") });
+    combined.alignContent = true;
+  },
   "flex-grow": (value, out) => out.push({ prop: "LV_STYLE_FLEX_GROW", value: num(parseInteger(value, 0)) }),
   flex: (value, out) => {
     const tokens = splitValue(value);
@@ -453,6 +533,13 @@ export function translateDeclarations(decls: CssDeclaration[], ctx: StyleContext
       prop: "LV_STYLE_FLEX_FLOW",
       value: constant(flexFlowName(combined.flexDirection?.value, combined.flexWrap?.value)),
     });
+  }
+
+  // LVGL's cross place only aligns items within their track, and a track is as
+  // wide as its widest item. CSS aligns a single line against the whole
+  // container, so the track has to be placed the same way.
+  if (combined.alignItems && !combined.alignContent && combined.flexWrap?.value !== "wrap") {
+    out.push({ prop: "LV_STYLE_FLEX_TRACK_PLACE", value: combined.alignItems });
   }
 
   return out;

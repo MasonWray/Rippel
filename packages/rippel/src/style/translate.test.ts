@@ -111,3 +111,38 @@ describe("parseColor", () => {
     expect(parseColor("hsl(0 0% 0%)")).toBeUndefined();
   });
 });
+
+describe("transition", () => {
+  const translate = (value: string) =>
+    translateDeclarations([{ prop: "transition", value }], {
+      fonts: { montserrat: [14] },
+      defaultFont: { family: "montserrat", size: 14 },
+      rem: 16,
+    });
+
+  it("maps properties, duration and easing", () => {
+    expect(translate("color 200ms ease-out, opacity 200ms ease-out")).toEqual([
+      {
+        prop: "LV_STYLE_TRANSITION",
+        value: {
+          t: "transition",
+          props: ["LV_STYLE_TEXT_COLOR", "LV_STYLE_TEXT_OPA", "LV_STYLE_OPA"],
+          timeMs: 200,
+          delayMs: 0,
+          path: "RP_PATH_EASE_OUT",
+        },
+      },
+    ]);
+  });
+
+  it("reads seconds and a delay", () => {
+    expect(translate("opacity 0.5s linear 100ms")[0].value).toMatchObject({ timeMs: 500, delayMs: 100, path: "RP_PATH_LINEAR" });
+  });
+
+  it("rejects what LVGL can't do", () => {
+    expect(() => translate("all 200ms")).toThrow(/List them/);
+    expect(() => translate("margin 200ms")).toThrow(/Can't animate/);
+    expect(() => translate("color 200ms, opacity 300ms")).toThrow(/one duration/);
+    expect(() => translate("color 200ms cubic-bezier(0,0,1,1)")).toThrow(/Unsupported easing/);
+  });
+});

@@ -8,7 +8,7 @@ import type { ColorFormat } from "../displays.js";
 export type Ptr = number;
 
 /** Widget type ids. Must match rp_widget_t in rippel_bridge.h. */
-export const WIDGET = { view: 0, label: 1, button: 2, slider: 3 } as const;
+export const WIDGET = { view: 0, label: 1, button: 2, slider: 3, arc: 4, bar: 5 } as const;
 export type WidgetType = keyof typeof WIDGET;
 
 /** Event ids. Must match rp_event_t in rippel_bridge.h. */
@@ -53,11 +53,18 @@ export interface Lvgl {
   labelSetText(obj: Ptr, text: string): void;
   sliderSetRange(obj: Ptr, min: number, max: number): void;
   sliderSetValue(obj: Ptr, value: number): void;
+  arcSetRange(obj: Ptr, min: number, max: number): void;
+  arcSetValue(obj: Ptr, value: number): void;
+  arcSetReadonly(obj: Ptr, readonly: boolean): void;
+  barSetRange(obj: Ptr, min: number, max: number): void;
+  barSetValue(obj: Ptr, value: number): void;
+  viewSetScroll(obj: Ptr, scroll: boolean): void;
   styleCreate(): Ptr;
   styleDestroy(style: Ptr): void;
   styleSetNum(style: Ptr, prop: number, value: number): void;
   styleSetColor(style: Ptr, prop: number, rgb: number): void;
   styleSetPtr(style: Ptr, prop: number, ptr: Ptr): void;
+  styleSetTransition(style: Ptr, props: number[], timeMs: number, delayMs: number, path: number): void;
   objAddStyle(obj: Ptr, style: Ptr, selector: number): void;
   objRemoveStyle(obj: Ptr, style: Ptr, selector: number): void;
   objSetLocalNum(obj: Ptr, prop: number, value: number, selector: number): void;
@@ -136,11 +143,23 @@ export async function loadLvgl(): Promise<Lvgl> {
     },
     sliderSetRange: (obj, min, max) => void m._rp_slider_set_range(obj, min, max),
     sliderSetValue: (obj, value) => void m._rp_slider_set_value(obj, value),
+    arcSetRange: (obj, min, max) => void m._rp_arc_set_range(obj, min, max),
+    arcSetValue: (obj, value) => void m._rp_arc_set_value(obj, value),
+    arcSetReadonly: (obj, readonly) => void m._rp_arc_set_readonly(obj, readonly ? 1 : 0),
+    barSetRange: (obj, min, max) => void m._rp_bar_set_range(obj, min, max),
+    barSetValue: (obj, value) => void m._rp_bar_set_value(obj, value),
+    viewSetScroll: (obj, scroll) => void m._rp_view_set_scroll(obj, scroll ? 1 : 0),
     styleCreate: () => m._rp_style_create(),
     styleDestroy: (style) => void m._rp_style_destroy(style),
     styleSetNum: (style, prop, value) => void m._rp_style_set_num(style, prop, value),
     styleSetColor: (style, prop, rgb) => void m._rp_style_set_color(style, prop, rgb),
     styleSetPtr: (style, prop, ptr) => void m._rp_style_set_ptr(style, prop, ptr),
+    styleSetTransition(style, props, timeMs, delayMs, path) {
+      const ptr = m._malloc(props.length * 4);
+      m.HEAP32.set(props, ptr >> 2);
+      m._rp_style_set_transition(style, ptr, props.length, timeMs, delayMs, path);
+      m._free(ptr);
+    },
     objAddStyle: (obj, style, selector) => void m._rp_obj_add_style(obj, style, selector),
     objRemoveStyle: (obj, style, selector) => void m._rp_obj_remove_style(obj, style, selector),
     objSetLocalNum: (obj, prop, value, selector) => void m._rp_obj_set_local_num(obj, prop, value, selector),

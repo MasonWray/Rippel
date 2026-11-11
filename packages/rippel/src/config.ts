@@ -17,6 +17,8 @@ export interface RippelConfig {
   entry?: string;
   /** Firmware contract module. Defaults to "src/firmware.contract.ts" if it exists. */
   contract?: string;
+  /** Dev-only script that plays the firmware in the simulator. Defaults to "src/firmware.mock.ts" if it exists. */
+  mock?: string;
   display: DisplayConfig;
   mcu?: McuConfig;
   /** Custom fonts, by family name. "montserrat" is built in. */

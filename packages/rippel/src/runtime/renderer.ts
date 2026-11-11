@@ -30,7 +30,8 @@ export class ElementNode implements StyledNode {
   listening = false;
   /** LVGL label created inside a <button> to show its text children. */
   implicitLabel: Ptr = 0;
-  sliderRange: [number, number] = [0, 100];
+  /** Min and max of a slider, arc or bar. */
+  range: [number, number] = [0, 100];
   name: string | undefined;
   dead = false;
   constructor(
@@ -93,7 +94,8 @@ function syncText(node: ElementNode) {
       lv.objCenter(node.implicitLabel);
     }
     if (node.implicitLabel) lv.labelSetText(node.implicitLabel, text);
-  } else if (texts.length) {
+  } else if (text) {
+    // Empty text nodes are fine: Solid leaves one as a marker where a <Show> renders nothing.
     throw new Error(`Text can't go directly inside <${node.type}>. Wrap it in a <label>.`);
   }
 }
@@ -113,7 +115,7 @@ function dispatchEvent(obj: Ptr, event: number, value: number) {
     case EVENT.press: h.onPress?.(); break;
     case EVENT.release:
       h.onRelease?.();
-      if (node.type === "slider") h.onChange?.(value);
+      if (node.type === "slider" || node.type === "arc") h.onChange?.(value);
       break;
     case EVENT.longPress: h.onLongPress?.(); break;
     case EVENT.valueChanged: h.onInput?.(value); break;
@@ -123,14 +125,25 @@ function dispatchEvent(obj: Ptr, event: number, value: number) {
 }
 
 const COMMON_EVENTS = ["onClick", "onPress", "onRelease", "onLongPress", "onFocus", "onBlur"];
-const SLIDER_EVENTS = ["onInput", "onChange"];
+const VALUE_EVENTS = ["onInput", "onChange"];
+
+/** Setters for widgets that have a range and a value. */
+function rangedSetters(type: WidgetType | "root") {
+  const lv = lvgl();
+  switch (type) {
+    case "slider": return { range: lv.sliderSetRange, value: lv.sliderSetValue };
+    case "arc": return { range: lv.arcSetRange, value: lv.arcSetValue };
+    case "bar": return { range: lv.barSetRange, value: lv.barSetValue };
+    default: return undefined;
+  }
+}
 
 function setProperty(node: RNode, name: string, value: unknown): void {
   if (node.kind !== "element") return;
   const lv = lvgl();
 
   if (name.startsWith("on")) {
-    const allowed = node.type === "slider" ? [...COMMON_EVENTS, ...SLIDER_EVENTS] : COMMON_EVENTS;
+    const allowed = node.type === "slider" || node.type === "arc" ? [...COMMON_EVENTS, ...VALUE_EVENTS] : COMMON_EVENTS;
     if (!allowed.includes(name)) throw new Error(`<${node.type}> has no "${name}" event`);
     if (value !== undefined && typeof value !== "function") {
       throw new Error(`"${name}" on <${node.type}> must be a function`);
@@ -161,20 +174,31 @@ function setProperty(node: RNode, name: string, value: unknown): void {
       return;
   }
 
-  if (node.type === "slider") {
+  const ranged = rangedSetters(node.type);
+  if (ranged) {
     switch (name) {
       case "min":
       case "max": {
         const n = Math.round(Number(value ?? (name === "min" ? 0 : 100)));
-        if (name === "min") node.sliderRange[0] = n;
-        else node.sliderRange[1] = n;
-        lv.sliderSetRange(node.obj, node.sliderRange[0], node.sliderRange[1]);
+        if (name === "min") node.range[0] = n;
+        else node.range[1] = n;
+        ranged.range(node.obj, node.range[0], node.range[1]);
         return;
       }
       case "value":
-        lv.sliderSetValue(node.obj, Math.round(Number(value ?? 0)));
+        ranged.value(node.obj, Math.round(Number(value ?? 0)));
         return;
     }
+  }
+
+  if (node.type === "arc" && name === "readonly") {
+    lv.arcSetReadonly(node.obj, Boolean(value));
+    return;
+  }
+
+  if (node.type === "view" && name === "scroll") {
+    lv.viewSetScroll(node.obj, Boolean(value));
+    return;
   }
 
   throw new Error(`Unknown prop "${name}" on <${node.type}>`);

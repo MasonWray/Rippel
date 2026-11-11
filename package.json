@@ -11,6 +11,7 @@
     "build:wasm": "npm run build:wasm -w rippel",
     "setup:emsdk": "node scripts/setup-emsdk.mjs",
     "test": "npm test -w rippel",
-    "dev": "npm run build && npm run dev -w thermostat-example"
+    "dev": "npm run build && npm run dev -w thermostat-example",
+    "demo": "npm run build && npm run dev -w espresso-example"
   }
 }

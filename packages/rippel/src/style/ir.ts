@@ -18,7 +18,9 @@ export type StyleValue =
   /** A named LVGL constant, e.g. "LV_FLEX_FLOW_ROW". */
   | { t: "const"; v: string }
   /** A font, resolved to an lv_font_t at runtime or codegen time. */
-  | { t: "font"; family: string; size: number };
+  | { t: "font"; family: string; size: number }
+  /** Animates the named LVGL style properties when the object changes state. */
+  | { t: "transition"; props: string[]; timeMs: number; delayMs: number; path: string };
 
 export interface StyleDecl {
   /** LVGL style property name, e.g. "LV_STYLE_BG_COLOR". */

@@ -121,7 +121,12 @@ export function compileStyleSheet(source: string, file: string, ctx: StyleContex
         if (err instanceof StyleError) throw new CssError(err.message, file, line, column);
         throw err;
       }
-      rules.push({ className: parsed.className, selector: parsed.selector, decls: translated });
+      // LVGL's theme tints disabled widgets grey. A :disabled rule states the
+      // look it wants, so turn the tint off and show exactly those colors.
+      const decls = parsed.selector.states.includes("LV_STATE_DISABLED")
+        ? [...translated, { prop: "LV_STYLE_RECOLOR_OPA", value: { t: "num" as const, v: 0 } }]
+        : translated;
+      rules.push({ className: parsed.className, selector: parsed.selector, decls });
     }
   }
   return { file, rules };

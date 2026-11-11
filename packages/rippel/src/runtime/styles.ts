@@ -40,6 +40,11 @@ export function setStyleContext(ctx: StyleContext): void {
 }
 
 function setStyleProp(lv: Lvgl, style: Ptr, decl: StyleDecl) {
+  if (decl.value.t === "transition") {
+    const { props, timeMs, delayMs, path } = decl.value;
+    lv.styleSetTransition(style, props.map((p) => lv.constant(p)), timeMs, delayMs, lv.constant(path));
+    return;
+  }
   const prop = lv.constant(decl.prop);
   const value = resolveValue(lv, decl.value);
   if (value.kind === "color") lv.styleSetColor(style, prop, value.v);
@@ -116,6 +121,7 @@ export function setInlineStyle(node: StyledNode, style: InlineStyle | undefined)
 
   const selector = selectorValue(lv, { part: "LV_PART_MAIN", states: [] });
   for (const decl of translateDeclarations(decls, styleContext)) {
+    if (decl.value.t === "transition") throw new Error("`transition` only works in a stylesheet, not in an inline style");
     const prop = lv.constant(decl.prop);
     const value = resolveValue(lv, decl.value);
     if (value.kind === "color") lv.objSetLocalColor(node.obj, prop, value.v, selector);

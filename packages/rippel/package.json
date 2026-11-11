@@ -22,6 +22,10 @@
       "types": "./dist/contract.d.ts",
       "default": "./dist/contract.js"
     },
+    "./mock": {
+      "types": "./dist/mock.d.ts",
+      "default": "./dist/mock.js"
+    },
     "./displays": {
       "types": "./dist/displays.d.ts",
       "default": "./dist/displays.js"

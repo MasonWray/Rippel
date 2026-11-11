@@ -31,6 +31,9 @@ lv_obj_t * rp_obj_create(rp_widget_t type, lv_obj_t * parent)
             obj = lv_obj_create(parent);
             lv_obj_remove_style_all(obj);
             lv_obj_add_style(obj, &view_base, LV_PART_MAIN);
+            /* Touches pass through a view to whatever is behind it, unless
+             * it has a handler (rp_obj_listen) or scrolls (rp_view_set_scroll). */
+            lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
             break;
         case RP_WIDGET_LABEL:
             obj = lv_label_create(parent);
@@ -41,6 +44,12 @@ lv_obj_t * rp_obj_create(rp_widget_t type, lv_obj_t * parent)
             break;
         case RP_WIDGET_SLIDER:
             obj = lv_slider_create(parent);
+            break;
+        case RP_WIDGET_ARC:
+            obj = lv_arc_create(parent);
+            break;
+        case RP_WIDGET_BAR:
+            obj = lv_bar_create(parent);
             break;
     }
     return obj;
@@ -94,12 +103,24 @@ static void forward_event(lv_event_t * e)
 
     int32_t value = 0;
     if(lv_obj_check_type(obj, &lv_slider_class)) value = lv_slider_get_value(obj);
+    else if(lv_obj_check_type(obj, &lv_arc_class)) value = lv_arc_get_value(obj);
     event_handler(obj, ev, value);
 }
 
 void rp_obj_listen(lv_obj_t * obj)
 {
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(obj, forward_event, LV_EVENT_ALL, NULL);
+}
+
+void rp_view_set_scroll(lv_obj_t * obj, bool scroll)
+{
+    if(scroll) {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    }
+    else {
+        lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    }
 }
 
 /* ---------- Widget properties ---------- */
@@ -124,7 +145,45 @@ int32_t rp_slider_get_value(lv_obj_t * obj)
     return lv_slider_get_value(obj);
 }
 
+void rp_arc_set_range(lv_obj_t * obj, int32_t min, int32_t max)
+{
+    lv_arc_set_range(obj, min, max);
+}
+
+void rp_arc_set_value(lv_obj_t * obj, int32_t value)
+{
+    lv_arc_set_value(obj, value);
+}
+
+void rp_arc_set_readonly(lv_obj_t * obj, bool readonly)
+{
+    if(readonly) {
+        lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(obj, LV_OPA_TRANSP, LV_PART_KNOB);
+    }
+    else {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_local_style_prop(obj, LV_STYLE_OPA, LV_PART_KNOB);
+    }
+}
+
+void rp_bar_set_range(lv_obj_t * obj, int32_t min, int32_t max)
+{
+    lv_bar_set_range(obj, min, max);
+}
+
+void rp_bar_set_value(lv_obj_t * obj, int32_t value)
+{
+    lv_bar_set_value(obj, value, LV_ANIM_OFF);
+}
+
 /* ---------- Styles ---------- */
+
+/* A transition descriptor and its zero-terminated property list, in one allocation. */
+typedef struct {
+    lv_style_transition_dsc_t dsc;
+    lv_style_prop_t props[];
+} rp_transition_t;
 
 lv_style_t * rp_style_create(void)
 {
@@ -135,6 +194,10 @@ lv_style_t * rp_style_create(void)
 
 void rp_style_destroy(lv_style_t * style)
 {
+    lv_style_value_t transition;
+    if(lv_style_get_prop(style, LV_STYLE_TRANSITION, &transition) == LV_STYLE_RES_FOUND) {
+        lv_free((void *)transition.ptr);
+    }
     lv_style_reset(style);
     lv_free(style);
 }
@@ -155,6 +218,26 @@ void rp_style_set_ptr(lv_style_t * style, int32_t prop, const void * ptr)
 {
     lv_style_value_t v = { .ptr = ptr };
     lv_style_set_prop(style, (lv_style_prop_t)prop, v);
+}
+
+void rp_style_set_transition(lv_style_t * style, const int32_t * props, int32_t count, uint32_t time,
+                             uint32_t delay, rp_path_t path)
+{
+    lv_anim_path_cb_t cb;
+    switch(path) {
+        case RP_PATH_EASE_IN: cb = lv_anim_path_ease_in; break;
+        case RP_PATH_EASE_OUT: cb = lv_anim_path_ease_out; break;
+        case RP_PATH_EASE_IN_OUT: cb = lv_anim_path_ease_in_out; break;
+        case RP_PATH_OVERSHOOT: cb = lv_anim_path_overshoot; break;
+        case RP_PATH_BOUNCE: cb = lv_anim_path_bounce; break;
+        default: cb = lv_anim_path_linear; break;
+    }
+
+    rp_transition_t * t = lv_malloc(sizeof(rp_transition_t) + sizeof(lv_style_prop_t) * ((size_t)count + 1));
+    for(int32_t i = 0; i < count; i++) t->props[i] = (lv_style_prop_t)props[i];
+    t->props[count] = LV_STYLE_PROP_INV;
+    lv_style_transition_dsc_init(&t->dsc, t->props, cb, time, delay, NULL);
+    lv_style_set_transition(style, &t->dsc);
 }
 
 void rp_obj_add_style(lv_obj_t * obj, lv_style_t * style, uint32_t selector)
@@ -281,7 +364,8 @@ static const rp_const_t constants[] = {
     C(LV_STYLE_SHADOW_OFFSET_X), C(LV_STYLE_SHADOW_OFFSET_Y), C(LV_STYLE_SHADOW_SPREAD),
     C(LV_STYLE_TEXT_COLOR), C(LV_STYLE_TEXT_OPA), C(LV_STYLE_TEXT_FONT),
     C(LV_STYLE_TEXT_ALIGN), C(LV_STYLE_TEXT_LETTER_SPACE), C(LV_STYLE_TEXT_LINE_SPACE), C(LV_STYLE_TEXT_DECOR),
-    C(LV_STYLE_OPA),
+    C(LV_STYLE_ARC_COLOR), C(LV_STYLE_ARC_OPA), C(LV_STYLE_ARC_WIDTH), C(LV_STYLE_ARC_ROUNDED),
+    C(LV_STYLE_OPA), C(LV_STYLE_RECOLOR_OPA),
     C(LV_STYLE_TRANSLATE_X), C(LV_STYLE_TRANSLATE_Y),
     C(LV_STYLE_LAYOUT),
     C(LV_STYLE_FLEX_FLOW), C(LV_STYLE_FLEX_MAIN_PLACE), C(LV_STYLE_FLEX_CROSS_PLACE),
@@ -314,6 +398,10 @@ static const rp_const_t constants[] = {
     /* Borders */
     C(LV_BORDER_SIDE_NONE), C(LV_BORDER_SIDE_BOTTOM), C(LV_BORDER_SIDE_TOP),
     C(LV_BORDER_SIDE_LEFT), C(LV_BORDER_SIDE_RIGHT), C(LV_BORDER_SIDE_FULL),
+
+    /* Easing */
+    C(RP_PATH_LINEAR), C(RP_PATH_EASE_IN), C(RP_PATH_EASE_OUT), C(RP_PATH_EASE_IN_OUT),
+    C(RP_PATH_OVERSHOOT), C(RP_PATH_BOUNCE),
 };
 
 #undef C
