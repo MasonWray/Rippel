@@ -1,0 +1,1684 @@
+/**
+ * The C backend's front half: reads the TSX source and turns it into a flat
+ * program of objects, signals, bindings and event handlers.
+ *
+ * Nothing runs at compile time. Components are inlined at each use, and every
+ * reactive JSX expression becomes one binding that re-runs when a signal it
+ * reads changes. <Show> and <Switch> build all their branches up front and
+ * hide the inactive ones.
+ *
+ * Anything outside the supported subset is a CodegenError with a location.
+ */
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { parseSync, type types as t } from "@babel/core";
+import { translateDeclarations, inlineDeclarations } from "../style/translate.js";
+import type { StyleContext, StyleDecl } from "../style/ir.js";
+
+export class CodegenError extends Error {
+  constructor(
+    message: string,
+    public readonly file: string,
+    public readonly line: number,
+    public readonly column: number,
+  ) {
+    super(message);
+    this.name = "CodegenError";
+  }
+}
+
+export type Base = "int" | "float" | "bool" | "string";
+
+export interface ValueInfo {
+  base: Base;
+  /** C type, for numbers and bools. */
+  ctype: string;
+  unsigned?: boolean;
+  maxLength?: number;
+}
+
+export interface Signal {
+  name: string;
+  kind: "firmware" | "local";
+  value: ValueInfo;
+  /** C initializer. */
+  initial: string;
+  binds: Bind[];
+}
+
+export interface ActionParam extends ValueInfo {
+  name: string;
+}
+
+export interface Action {
+  name: string;
+  params: ActionParam[];
+}
+
+export interface Bind {
+  name: string;
+  body: string[];
+}
+
+export interface Handler {
+  name: string;
+  body: string[];
+  /** The widget's current value is read into `value`. */
+  valueGetter?: string;
+}
+
+export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar";
+
+export interface Obj {
+  name: string;
+  /** Referenced after init, so it needs file scope. */
+  isStatic: boolean;
+  handle?: string;
+}
+
+export type InitOp =
+  | { op: "create"; obj: Obj; widget: Widget; parent: Obj | "root" }
+  | { op: "line"; text: string };
+
+/** A class list that depends on signals. Exactly one alternative applies at a time. */
+export interface ClassApply {
+  obj: Obj;
+  classes: string[];
+}
+
+export interface UiProgram {
+  signals: Signal[];
+  actions: Action[];
+  binds: Bind[];
+  handlers: Handler[];
+  objects: Obj[];
+  init: InitOp[];
+  /** Style rules are referenced by class name through this callback at emit time. */
+  usedWidgets: Set<Widget>;
+  usedFonts: Set<string>;
+  warnings: string[];
+}
+
+/** C for adding or removing the styles of a set of classes, in cascade order. */
+export interface StyleLookup {
+  add(obj: string, classes: string[]): string[];
+  remove(obj: string, classes: string[]): string[];
+}
+
+export interface CompileInput {
+  entry: string;
+  contract: string | undefined;
+  fpu: "none" | "single" | "double";
+  styleContext: StyleContext;
+  styles: StyleLookup;
+  fontSymbol(family: string, size: number): string;
+}
+
+/** A compiled expression. */
+interface Expr {
+  type: Base;
+  /** C expression. For strings, a `const char *`, if the string doesn't need formatting. */
+  code: string;
+  deps: Set<Signal>;
+  unsigned?: boolean;
+  str?: StrNode;
+}
+
+type StrNode =
+  | { k: "lit"; v: string }
+  | { k: "ptr"; code: string; max: number }
+  | { k: "int"; code: string; unsigned?: boolean }
+  | { k: "float"; code: string; decimals?: number }
+  | { k: "cond"; c: string; a: StrNode; b: StrNode }
+  | { k: "cat"; parts: StrNode[] };
+
+type Scope = Map<string, Binding> & { parent?: Scope };
+type FuncNode = t.ArrowFunctionExpression | t.FunctionExpression | t.FunctionDeclaration;
+
+type Binding =
+  | { k: "signal"; signal: Signal }
+  | { k: "setter"; signal: Signal }
+  | { k: "action"; action: Action }
+  | { k: "func"; node: FuncNode; scope: Scope; module: Module }
+  | { k: "lazy"; node: t.Expression; scope: Scope; module: Module }
+  | { k: "children"; nodes: JsxChild[]; scope: Scope; module: Module }
+  | { k: "value"; expr: Expr }
+  | { k: "props"; props: Map<string, Binding>; children?: Binding }
+  | { k: "rippel"; name: string };
+
+type JsxChild = t.JSXElement["children"][number];
+
+interface Module {
+  file: string;
+  scope: Scope;
+  defaultExport?: Binding;
+  exports: Map<string, Binding>;
+}
+
+/** Where a piece of UI is being built. */
+interface Place {
+  parent: Obj | "root";
+  /** Only build when this holds (inside a <Show> or <Switch> branch). */
+  guard: Expr | undefined;
+  /** Collects the top-level objects of the current branch. */
+  roots: Obj[] | undefined;
+}
+
+const CONTRACT_TYPES: Record<string, ValueInfo> = {
+  i8: { base: "int", ctype: "int8_t" },
+  u8: { base: "int", ctype: "uint8_t", unsigned: true },
+  i16: { base: "int", ctype: "int16_t" },
+  u16: { base: "int", ctype: "uint16_t", unsigned: true },
+  i32: { base: "int", ctype: "int32_t" },
+  u32: { base: "int", ctype: "uint32_t", unsigned: true },
+  f32: { base: "float", ctype: "float" },
+  bool: { base: "bool", ctype: "bool" },
+};
+
+const LATER = "isn't supported by `rippel build` yet";
+const LATER_MANY = "aren't supported by `rippel build` yet";
+const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar" };
+const WIDGET_ENUM: Record<Widget, string> = {
+  view: "RP_WIDGET_VIEW",
+  label: "RP_WIDGET_LABEL",
+  button: "RP_WIDGET_BUTTON",
+  slider: "RP_WIDGET_SLIDER",
+  arc: "RP_WIDGET_ARC",
+  bar: "RP_WIDGET_BAR",
+};
+export const widgetEnum = (w: Widget) => WIDGET_ENUM[w];
+
+export const snake = (name: string) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+/** Escapes text for a C string literal. Non-ASCII goes out as hex bytes. */
+export function cString(text: string): string {
+  let out = "";
+  const bytes = Buffer.from(text, "utf8");
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    if (b === 0x22) out += '\\"';
+    else if (b === 0x5c) out += "\\\\";
+    else if (b === 0x0a) out += "\\n";
+    else if (b < 0x20 || b >= 0x7f) {
+      out += `\\x${b.toString(16).padStart(2, "0")}`;
+      const next = bytes[i + 1];
+      // A hex escape swallows any hex digits after it, so end the literal.
+      if (next !== undefined && next < 0x7f && /[0-9a-fA-F]/.test(String.fromCharCode(next))) out += '" "';
+    } else out += String.fromCharCode(b);
+  }
+  return `"${out}"`;
+}
+
+const fmtEscape = (s: string) => s.replaceAll("%", "%%");
+const utf8Length = (s: string) => Buffer.byteLength(s, "utf8");
+
+function floatLiteral(v: number): string {
+  const s = String(v);
+  return /[.e]/.test(s) ? `${s}f` : `${s}.0f`;
+}
+
+/** Collapses JSX text whitespace the way Solid's compiler does. */
+function trimJsxText(text: string): string {
+  let s = text.replace(/\r/g, "");
+  if (s.includes("\n")) {
+    s = s
+      .split("\n")
+      .map((line, i) => (i ? line.replace(/^\s*/g, "") : line))
+      .filter((line) => !/^\s*$/.test(line))
+      .join(" ");
+  }
+  return s.replace(/\s+/g, " ");
+}
+
+function strBound(node: StrNode): number {
+  switch (node.k) {
+    case "lit": return utf8Length(node.v);
+    case "ptr": return node.max;
+    case "int": return 11;
+    case "float": return 32;
+    case "cond": return Math.max(strBound(node.a), strBound(node.b));
+    case "cat": return node.parts.reduce((sum, p) => sum + strBound(p), 0);
+  }
+}
+
+function flattenStr(node: StrNode): StrNode[] {
+  return node.k === "cat" ? node.parts.flatMap(flattenStr) : [node];
+}
+
+function isPlain(node: StrNode): boolean {
+  return node.k === "lit" || node.k === "ptr" || (node.k === "cond" && isPlain(node.a) && isPlain(node.b));
+}
+
+function plainCode(node: StrNode): string {
+  switch (node.k) {
+    case "lit": return cString(node.v);
+    case "ptr": return node.code;
+    case "cond": return `(${node.c} ? ${plainCode(node.a)} : ${plainCode(node.b)})`;
+    default: throw new Error("Not a plain string");
+  }
+}
+
+function strPiece(node: StrNode): { format: string; args: string[] } | undefined {
+  switch (node.k) {
+    case "lit": return { format: fmtEscape(node.v), args: [] };
+    case "ptr": return { format: "%s", args: [node.code] };
+    case "int": return node.unsigned ? { format: "%u", args: [`(unsigned)${wrap(node.code)}`] } : { format: "%d", args: [`(int)${wrap(node.code)}`] };
+    case "float": return { format: node.decimals === undefined ? "%g" : `%.${node.decimals}f`, args: [`(double)${wrap(node.code)}`] };
+    case "cond": return isPlain(node) ? { format: "%s", args: [plainCode(node)] } : undefined;
+    case "cat": return undefined;
+  }
+}
+
+function wrap(code: string): string {
+  return /^[\w.]+$/.test(code) ? code : `(${code})`;
+}
+
+/** Statements that format `node` into the char buffer `text`, using `n` as the write position. */
+function appendStr(node: StrNode, indent: string): string[] {
+  const out: string[] = [];
+  let format = "";
+  let args: string[] = [];
+  const flush = () => {
+    if (!format) return;
+    out.push(`${indent}n += snprintf(text + n, sizeof(text) - n, ${[cString(format), ...args].join(", ")});`);
+    format = "";
+    args = [];
+  };
+  for (const part of flattenStr(node)) {
+    const piece = strPiece(part);
+    if (piece) {
+      format += piece.format;
+      args.push(...piece.args);
+      continue;
+    }
+    if (part.k !== "cond") throw new Error("Unexpected string node");
+    flush();
+    out.push(`${indent}if(${part.c}) {`, ...appendStr(part.a, indent + "    "), `${indent}}`, `${indent}else {`, ...appendStr(part.b, indent + "    "), `${indent}}`);
+  }
+  flush();
+  return out;
+}
+
+/** Statements that set a label to a string expression. */
+function setText(obj: string, node: StrNode): string[] {
+  const parts = flattenStr(node);
+  if (parts.every((p) => p.k === "lit")) {
+    return [`lv_label_set_text(${obj}, ${cString(parts.map((p) => (p as { v: string }).v).join(""))});`];
+  }
+  if (parts.length === 1 && isPlain(parts[0])) return [`lv_label_set_text(${obj}, ${plainCode(parts[0])});`];
+
+  const size = strBound(node) + 1;
+  if (parts.every((p) => strPiece(p))) {
+    const pieces = parts.map((p) => strPiece(p)!);
+    const format = pieces.map((p) => p.format).join("");
+    const args = pieces.flatMap((p) => p.args);
+    return [`char text[${size}];`, `snprintf(text, sizeof(text), ${[cString(format), ...args].join(", ")});`, `lv_label_set_text(${obj}, text);`];
+  }
+  return [`char text[${size}];`, "int n = 0;", ...appendStr(node, ""), `lv_label_set_text(${obj}, text);`];
+}
+
+function toStr(e: Expr): StrNode {
+  switch (e.type) {
+    case "string": return e.str!;
+    case "int": return { k: "int", code: e.code, unsigned: e.unsigned };
+    case "float": return { k: "float", code: e.code };
+    case "bool": return { k: "cond", c: e.code, a: { k: "lit", v: "true" }, b: { k: "lit", v: "false" } };
+  }
+}
+
+function union(...exprs: (Expr | undefined)[]): Set<Signal> {
+  const deps = new Set<Signal>();
+  for (const e of exprs) if (e) for (const d of e.deps) deps.add(d);
+  return deps;
+}
+
+const noDeps = () => new Set<Signal>();
+const intLit = (v: number): Expr => ({ type: "int", code: String(v), deps: noDeps() });
+const boolExpr = (code: string, deps: Set<Signal>): Expr => ({ type: "bool", code, deps });
+
+function strExpr(str: StrNode, deps: Set<Signal>): Expr {
+  return { type: "string", code: isPlain(str) ? plainCode(str) : "", deps, str };
+}
+
+function newScope(parent?: Scope): Scope {
+  const scope = new Map<string, Binding>() as Scope;
+  scope.parent = parent;
+  return scope;
+}
+
+function lookup(scope: Scope | undefined, name: string): Binding | undefined {
+  for (let s = scope; s; s = s.parent) {
+    const found = s.get(name);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+const unwrap = (node: t.Node): t.Node => {
+  let current = node;
+  while (
+    current.type === "TSAsExpression" ||
+    current.type === "TSNonNullExpression" ||
+    current.type === "TSSatisfiesExpression" ||
+    current.type === "ParenthesizedExpression"
+  ) {
+    current = current.expression;
+  }
+  return current;
+};
+
+function isFunc(node: t.Node): node is FuncNode {
+  return node.type === "ArrowFunctionExpression" || node.type === "FunctionExpression" || node.type === "FunctionDeclaration";
+}
+
+class Compiler {
+  readonly program: UiProgram = {
+    signals: [],
+    actions: [],
+    binds: [],
+    handlers: [],
+    objects: [],
+    init: [],
+    usedWidgets: new Set(),
+    usedFonts: new Set(),
+    warnings: [],
+  };
+  private readonly modules = new Map<string, Module>();
+  private readonly contract = new Map<string, Binding>();
+  private readonly names = new Set<string>();
+  private instance = 0;
+  private counter = 0;
+
+  constructor(
+    private readonly input: CompileInput,
+    /** Local number signals known to hold fractions, from earlier passes. */
+    private readonly floatSignals: Set<string>,
+    private readonly onDemote: (key: string) => void,
+  ) {}
+
+  run(): UiProgram {
+    if (this.input.contract) this.loadContract(this.input.contract);
+    const entry = this.loadModule(this.input.entry);
+    const root = entry.defaultExport;
+    if (!root || root.k !== "func") {
+      throw new CodegenError("The entry module must default-export the root component.", entry.file, 1, 1);
+    }
+    this.inlineComponent(root, { k: "props", props: new Map() }, entry, { parent: "root", guard: undefined, roots: undefined });
+    return this.program;
+  }
+
+  private fail(node: t.Node, module: Module, message: string): never {
+    const loc = node.loc?.start;
+    throw new CodegenError(message, module.file, loc?.line ?? 1, (loc?.column ?? 0) + 1);
+  }
+
+  private unique(base: string): string {
+    let name = base;
+    for (let i = 2; this.names.has(name); i++) name = `${base}_${i}`;
+    this.names.add(name);
+    return name;
+  }
+
+  // ---------- Modules ----------
+
+  private parse(file: string): t.File {
+    const ast = parseSync(readFileSync(file, "utf8"), {
+      filename: file,
+      babelrc: false,
+      configFile: false,
+      sourceType: "module",
+      parserOpts: { plugins: ["jsx", "typescript"] },
+    });
+    if (!ast) throw new CodegenError("Couldn't parse this file", file, 1, 1);
+    return ast;
+  }
+
+  private loadContract(file: string) {
+    const module: Module = { file, scope: newScope(), exports: new Map() };
+    const typeOf = (node: t.Node): ValueInfo => {
+      if (node.type === "Identifier" && CONTRACT_TYPES[node.name]) return CONTRACT_TYPES[node.name];
+      if (node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "str") {
+        const size = node.arguments[0];
+        if (size?.type === "NumericLiteral") return { base: "string", ctype: "char", maxLength: size.value };
+      }
+      this.fail(node, module, "Expected a contract type like u8, f32, bool or str(32)");
+    };
+
+    for (const statement of this.parse(file).program.body) {
+      if (statement.type === "ImportDeclaration") continue;
+      if (statement.type !== "ExportNamedDeclaration" || statement.declaration?.type !== "VariableDeclaration") {
+        this.fail(statement, module, "A contract only exports signals and actions");
+      }
+      for (const decl of statement.declaration.declarations) {
+        const init = decl.init && unwrap(decl.init);
+        if (decl.id.type !== "Identifier" || init?.type !== "CallExpression" || init.callee.type !== "Identifier") {
+          this.fail(decl, module, "Expected `export const name = signal(...)` or `action(...)`");
+        }
+        const name = decl.id.name;
+        if (init.callee.name === "signal") {
+          const value = typeOf(init.arguments[0]);
+          const signal: Signal = { name: snake(name), kind: "firmware", value, initial: this.contractInitial(init.arguments[1], value, module), binds: [] };
+          this.program.signals.push(signal);
+          this.contract.set(name, { k: "signal", signal });
+        } else if (init.callee.name === "action") {
+          const shape = init.arguments[0];
+          if (shape?.type !== "ObjectExpression") this.fail(init, module, "action() takes an object of parameter types");
+          const params = shape.properties.map((p) => {
+            if (p.type !== "ObjectProperty" || p.key.type !== "Identifier") this.fail(p, module, "Expected `name: type`");
+            return { name: snake(p.key.name), jsName: p.key.name, ...typeOf(p.value) };
+          });
+          const action: Action = { name: snake(name), params };
+          this.program.actions.push(action);
+          this.contract.set(name, { k: "action", action });
+        } else {
+          this.fail(init, module, "Expected `signal(...)` or `action(...)`");
+        }
+      }
+    }
+  }
+
+  private contractInitial(options: t.Node | undefined, value: ValueInfo, module: Module): string {
+    let literal: t.Node | undefined;
+    if (options) {
+      if (options.type !== "ObjectExpression") this.fail(options, module, "Expected `{ initial: ... }`");
+      for (const p of options.properties) {
+        if (p.type === "ObjectProperty" && p.key.type === "Identifier" && p.key.name === "initial") literal = unwrap(p.value);
+      }
+    }
+    switch (value.base) {
+      case "bool":
+        if (literal && literal.type !== "BooleanLiteral") this.fail(literal, module, "Expected true or false");
+        return literal?.type === "BooleanLiteral" && literal.value ? "true" : "false";
+      case "string":
+        if (literal && literal.type !== "StringLiteral") this.fail(literal, module, "Expected a string");
+        return cString(literal?.type === "StringLiteral" ? literal.value : "");
+      default: {
+        let v = 0;
+        if (literal?.type === "NumericLiteral") v = literal.value;
+        else if (literal?.type === "UnaryExpression" && literal.operator === "-" && literal.argument.type === "NumericLiteral") v = -literal.argument.value;
+        else if (literal) this.fail(literal, module, "Expected a number");
+        return value.base === "float" ? floatLiteral(v) : String(Math.trunc(v));
+      }
+    }
+  }
+
+  private resolveImport(from: string, source: string, node: t.Node, module: Module): string {
+    const base = resolve(dirname(from), source);
+    for (const candidate of [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`]) {
+      if (existsSync(candidate) && /\.tsx?$/.test(candidate)) return candidate;
+    }
+    this.fail(node, module, `Can't find "${source}"`);
+  }
+
+  private loadModule(file: string): Module {
+    const existing = this.modules.get(file);
+    if (existing) return existing;
+    const module: Module = { file, scope: newScope(), exports: new Map() };
+    this.modules.set(file, module);
+
+    const body = this.parse(file).program.body;
+    for (const statement of body) {
+      if (statement.type === "ImportDeclaration") this.bindImport(statement, module);
+    }
+    for (const statement of body) {
+      switch (statement.type) {
+        case "ImportDeclaration":
+        case "TSTypeAliasDeclaration":
+        case "TSInterfaceDeclaration":
+          break;
+        case "ExportNamedDeclaration":
+          if (statement.exportKind === "type" || !statement.declaration) break;
+          for (const [name, binding] of this.declare(statement.declaration, module.scope, module)) module.exports.set(name, binding);
+          break;
+        case "ExportDefaultDeclaration": {
+          const decl = statement.declaration;
+          if (decl.type === "FunctionDeclaration" || decl.type === "ArrowFunctionExpression" || decl.type === "FunctionExpression") {
+            const binding: Binding = { k: "func", node: decl, scope: module.scope, module };
+            module.defaultExport = binding;
+            if (decl.type === "FunctionDeclaration" && decl.id) module.scope.set(decl.id.name, binding);
+          } else if (decl.type === "Identifier") {
+            module.defaultExport = lookup(module.scope, decl.name);
+          } else {
+            this.fail(decl, module, "Default-export a function");
+          }
+          break;
+        }
+        default:
+          this.declare(statement, module.scope, module);
+      }
+    }
+    return module;
+  }
+
+  private bindImport(statement: t.ImportDeclaration, module: Module) {
+    if (statement.importKind === "type") return;
+    const source = statement.source.value;
+    if (source.endsWith(".css")) return;
+    if (source === "rippel" || source === "rippel/contract") {
+      for (const spec of statement.specifiers) {
+        if (spec.type === "ImportSpecifier" && spec.importKind !== "type" && spec.imported.type === "Identifier") {
+          module.scope.set(spec.local.name, { k: "rippel", name: spec.imported.name });
+        }
+      }
+      return;
+    }
+    const target = this.resolveImport(module.file, source, statement, module);
+    if (this.input.contract && resolve(target) === resolve(this.input.contract)) {
+      for (const spec of statement.specifiers) {
+        if (spec.type !== "ImportSpecifier" || spec.imported.type !== "Identifier") {
+          this.fail(spec, module, "Import contract signals and actions by name");
+        }
+        const binding = this.contract.get(spec.imported.name);
+        if (binding) module.scope.set(spec.local.name, binding);
+        else if (spec.importKind !== "type") this.fail(spec, module, `The contract has no "${spec.imported.name}"`);
+      }
+      return;
+    }
+    const imported = this.loadModule(target);
+    for (const spec of statement.specifiers) {
+      if (spec.type === "ImportNamespaceSpecifier") this.fail(spec, module, `\`import * as\` ${LATER}`);
+      if (spec.type === "ImportDefaultSpecifier") {
+        if (!imported.defaultExport) this.fail(spec, module, `"${source}" has no default export`);
+        module.scope.set(spec.local.name, imported.defaultExport);
+      } else if (spec.importKind !== "type" && spec.imported.type === "Identifier") {
+        const binding = imported.exports.get(spec.imported.name);
+        if (!binding) this.fail(spec, module, `"${source}" doesn't export "${spec.imported.name}"`);
+        module.scope.set(spec.local.name, binding);
+      }
+    }
+  }
+
+  /** Declares a function or `const` in `scope` and returns what it bound. */
+  private declare(statement: t.Statement | t.Declaration, scope: Scope, module: Module, guard?: Expr): Map<string, Binding> {
+    const bound = new Map<string, Binding>();
+    const add = (name: string, binding: Binding) => {
+      scope.set(name, binding);
+      bound.set(name, binding);
+    };
+
+    if (statement.type === "FunctionDeclaration") {
+      if (statement.id) add(statement.id.name, { k: "func", node: statement, scope, module });
+      return bound;
+    }
+    if (statement.type === "TSTypeAliasDeclaration" || statement.type === "TSInterfaceDeclaration") return bound;
+    if (statement.type !== "VariableDeclaration") this.fail(statement, module, `This statement ${LATER} here`);
+    if (statement.kind !== "const") this.fail(statement, module, "Use `const` here. Reactive state goes in a signal.");
+
+    for (const decl of statement.declarations) {
+      const init = decl.init && unwrap(decl.init);
+      if (!init) this.fail(decl, module, "Expected an initial value");
+
+      if (decl.id.type === "ArrayPattern") {
+        if (init.type !== "CallExpression" || init.callee.type !== "Identifier" || lookup(scope, init.callee.name)?.k !== "rippel") {
+          this.fail(decl, module, "Array destructuring only works with createSignal");
+        }
+        const [getter, setter] = decl.id.elements;
+        if (getter?.type !== "Identifier") this.fail(decl, module, "Expected `const [value, setValue] = createSignal(...)`");
+        if (guard) this.fail(decl, module, `Local signals inside a <Show> or <Switch> branch ${LATER_MANY}`);
+        const signal = this.createLocalSignal(getter.name, init, scope, module);
+        add(getter.name, { k: "signal", signal });
+        if (setter?.type === "Identifier") add(setter.name, { k: "setter", signal });
+        continue;
+      }
+
+      if (decl.id.type !== "Identifier") this.fail(decl, module, `This kind of destructuring ${LATER}`);
+      const name = decl.id.name;
+      if (isFunc(init)) {
+        add(name, { k: "func", node: init, scope, module });
+      } else if (init.type === "CallExpression" && init.callee.type === "Identifier" && lookup(scope, init.callee.name)?.k === "rippel") {
+        const helper = lookup(scope, init.callee.name) as { name: string };
+        const arg = init.arguments[0] && unwrap(init.arguments[0]);
+        if (helper.name !== "createMemo" || !arg || !isFunc(arg)) this.fail(init, module, `${helper.name}() ${LATER} here`);
+        add(name, { k: "func", node: arg, scope, module });
+      } else {
+        add(name, { k: "lazy", node: init as t.Expression, scope, module });
+      }
+    }
+    return bound;
+  }
+
+  private createLocalSignal(name: string, call: t.CallExpression, scope: Scope, module: Module): Signal {
+    const helper = lookup(scope, (call.callee as t.Identifier).name) as { name: string };
+    if (helper.name !== "createSignal") this.fail(call, module, `${helper.name}() ${LATER} here`);
+    const arg = call.arguments[0];
+    if (!arg || arg.type === "SpreadElement" || arg.type === "ArgumentPlaceholder") this.fail(call, module, "createSignal needs an initial value for the device build");
+    const initial = this.expr(arg as t.Expression, scope, module);
+    if (initial.deps.size) this.fail(arg, module, "A signal's initial value can't read other signals in the device build");
+    if (initial.type === "string") this.fail(arg, module, `Local string signals ${LATER_MANY}. Use a contract signal.`);
+
+    const cName = this.unique(snake(name));
+    const key = `${this.instance}:${cName}`;
+    let value: ValueInfo;
+    let code = initial.code;
+    if (initial.type === "bool") value = { base: "bool", ctype: "bool" };
+    else if (initial.type === "float" || this.floatSignals.has(key)) {
+      value = { base: "float", ctype: "float" };
+      if (initial.type === "int") code = floatLiteral(Number(initial.code));
+    } else value = { base: "int", ctype: "int32_t" };
+
+    const signal: Signal & { key: string } = { name: cName, kind: "local", value, initial: code, binds: [], key };
+    this.program.signals.push(signal);
+    return signal;
+  }
+
+  // ---------- Expressions ----------
+
+  private resolveBinding(node: t.Node, scope: Scope, module: Module): { binding: Binding; module: Module } | undefined {
+    const n = unwrap(node);
+    if (n.type === "Identifier") {
+      const binding = lookup(scope, n.name);
+      if (!binding) return undefined;
+      if (binding.k === "lazy") {
+        const inner = this.resolveBinding(binding.node, binding.scope, binding.module);
+        return inner ?? { binding, module };
+      }
+      return { binding, module };
+    }
+    if (n.type === "MemberExpression" && !n.computed && n.property.type === "Identifier") {
+      const object = this.resolveBinding(n.object, scope, module);
+      if (object?.binding.k !== "props") return undefined;
+      if (n.property.name === "children") return object.binding.children ? { binding: object.binding.children, module } : undefined;
+      const binding = object.binding.props.get(n.property.name);
+      if (!binding) return undefined;
+      if (binding.k === "lazy") {
+        const inner = this.resolveBinding(binding.node, binding.scope, binding.module);
+        return inner ?? { binding, module };
+      }
+      return { binding, module };
+    }
+    return undefined;
+  }
+
+  private bindParams(func: FuncNode, args: Binding[], scope: Scope, module: Module): Scope {
+    const inner = newScope(scope);
+    func.params.forEach((param, i) => {
+      const p = param.type === "AssignmentPattern" ? param.left : param;
+      if (p.type === "Identifier") {
+        const arg = args[i];
+        if (arg) inner.set(p.name, arg);
+      } else if (p.type === "ObjectPattern" && args[i]?.k === "props") {
+        const props = args[i] as Extract<Binding, { k: "props" }>;
+        for (const prop of p.properties) {
+          if (prop.type !== "ObjectProperty" || prop.key.type !== "Identifier" || prop.value.type !== "Identifier") {
+            this.fail(prop, module, `This kind of destructuring ${LATER}`);
+          }
+          const value = prop.key.name === "children" ? props.children : props.props.get(prop.key.name);
+          if (value) inner.set(prop.value.name, value);
+        }
+      } else {
+        this.fail(param, module, `This kind of parameter ${LATER}`);
+      }
+    });
+    return inner;
+  }
+
+  /** The expression a function evaluates to, if its body is that simple. */
+  private returned(func: FuncNode, module: Module): { value: t.Node; statements: t.Statement[] } {
+    if (func.body.type !== "BlockStatement") return { value: func.body, statements: [] };
+    const body = func.body.body;
+    const last = body[body.length - 1];
+    if (last?.type !== "ReturnStatement" || !last.argument) this.fail(func, module, "Expected the function to end with a return");
+    return { value: last.argument, statements: body.slice(0, -1) };
+  }
+
+  private inlineValue(func: FuncNode, scope: Scope, args: Binding[], module: Module, compile: (value: t.Node, inner: Scope) => Expr): Expr {
+    const inner = this.bindParams(func, args, scope, module);
+    const { value, statements } = this.returned(func, module);
+    for (const statement of statements) this.declare(statement, inner, module);
+    return compile(value, inner);
+  }
+
+  private expr(node: t.Node, scope: Scope, module: Module): Expr {
+    const n = unwrap(node);
+    switch (n.type) {
+      case "NumericLiteral":
+        return Number.isInteger(n.value) ? intLit(n.value) : { type: "float", code: floatLiteral(n.value), deps: noDeps() };
+      case "BooleanLiteral":
+        return boolExpr(n.value ? "true" : "false", noDeps());
+      case "StringLiteral":
+        return strExpr({ k: "lit", v: n.value }, noDeps());
+      case "TemplateLiteral": {
+        const parts: StrNode[] = [];
+        const deps = noDeps();
+        n.quasis.forEach((quasi, i) => {
+          if (quasi.value.cooked) parts.push({ k: "lit", v: quasi.value.cooked });
+          const e = n.expressions[i];
+          if (e) {
+            const value = this.expr(e, scope, module);
+            parts.push(toStr(value));
+            for (const d of value.deps) deps.add(d);
+          }
+        });
+        return strExpr(parts.length === 1 ? parts[0] : { k: "cat", parts }, deps);
+      }
+      case "Identifier": {
+        if (n.name === "undefined") this.fail(n, module, `undefined ${LATER}`);
+        const found = lookup(scope, n.name);
+        if (!found) this.fail(n, module, `"${n.name}" isn't defined`);
+        if (found.k === "value") return found.expr;
+        if (found.k === "lazy") return this.expr(found.node, found.scope, found.module);
+        this.fail(n, module, `"${n.name}" can't be used as a value here. Signals are read by calling them: ${n.name}().`);
+        break;
+      }
+      case "MemberExpression": {
+        const resolved = this.resolveBinding(n, scope, module);
+        if (resolved?.binding.k === "lazy") return this.expr(resolved.binding.node, resolved.binding.scope, resolved.binding.module);
+        if (resolved?.binding.k === "value") return resolved.binding.expr;
+        if (n.object.type === "Identifier" && n.object.name === "Math" && n.property.type === "Identifier" && n.property.name === "PI") {
+          return { type: "float", code: "3.14159265f", deps: noDeps() };
+        }
+        this.fail(n, module, `This property access ${LATER}`);
+        break;
+      }
+      case "UnaryExpression": {
+        const value = this.expr(n.argument, scope, module);
+        if (n.operator === "!") return boolExpr(`!${wrap(this.truthy(value, n, module))}`, value.deps);
+        if (n.operator === "-" && (value.type === "int" || value.type === "float")) return { ...value, code: `-${wrap(value.code)}`, unsigned: false };
+        if (n.operator === "+" && (value.type === "int" || value.type === "float")) return value;
+        this.fail(n, module, `The operator "${n.operator}" ${LATER}`);
+        break;
+      }
+      case "ConditionalExpression": {
+        const c = this.expr(n.test, scope, module);
+        const a = this.expr(n.consequent, scope, module);
+        const b = this.expr(n.alternate, scope, module);
+        const cond = this.truthy(c, n.test, module);
+        const deps = union(c, a, b);
+        if (a.type === "string" || b.type === "string") {
+          return strExpr({ k: "cond", c: cond, a: toStr(a), b: toStr(b) }, deps);
+        }
+        if (a.type === "bool" && b.type === "bool") return boolExpr(`(${cond} ? ${a.code} : ${b.code})`, deps);
+        if (a.type === "bool" || b.type === "bool") this.fail(n, module, "Both sides of this ?: need the same type for the device build");
+        const type: Base = a.type === "float" || b.type === "float" ? "float" : "int";
+        return { type, code: `(${cond} ? ${a.code} : ${b.code})`, deps };
+      }
+      case "LogicalExpression": {
+        const a = this.expr(n.left, scope, module);
+        const b = this.expr(n.right, scope, module);
+        if (n.operator === "??") this.fail(n, module, `The ?? operator ${LATER}`);
+        if (a.type !== "bool" || b.type !== "bool") {
+          this.fail(n, module, `${n.operator} needs true/false values on both sides for the device build. Compare explicitly, or use ?:.`);
+        }
+        return boolExpr(`(${a.code} ${n.operator} ${b.code})`, union(a, b));
+      }
+      case "BinaryExpression":
+        return this.binary(n, scope, module);
+      case "CallExpression":
+        return this.call(n, scope, module);
+      default:
+        this.fail(n, module, `This expression (${n.type}) ${LATER}`);
+    }
+  }
+
+  private truthy(e: Expr, node: t.Node, module: Module): string {
+    switch (e.type) {
+      case "bool": return e.code;
+      case "int":
+      case "float": return `(${e.code} != 0)`;
+      case "string":
+        if (!e.code) this.fail(node, module, "This string can't be used as a condition");
+        return `(${wrap(e.code)}[0] != '\\0')`;
+    }
+  }
+
+  private binary(n: t.BinaryExpression, scope: Scope, module: Module): Expr {
+    const a = this.expr(n.left, scope, module);
+    const b = this.expr(n.right, scope, module);
+    const deps = union(a, b);
+    const isNumber = (e: Expr) => e.type === "int" || e.type === "float";
+
+    switch (n.operator) {
+      case "+":
+        if (a.type === "string" || b.type === "string") return strExpr({ k: "cat", parts: [toStr(a), toStr(b)] }, deps);
+      // falls through
+      case "-":
+      case "*":
+      case "%": {
+        if (!isNumber(a) || !isNumber(b)) this.fail(n, module, `"${n.operator}" needs numbers`);
+        if (n.operator === "%") {
+          if (a.type === "float" || b.type === "float") return { type: "float", code: `fmodf(${a.code}, ${b.code})`, deps };
+        }
+        return { type: a.type === "float" || b.type === "float" ? "float" : "int", code: `(${a.code} ${n.operator} ${b.code})`, deps };
+      }
+      case "/":
+        if (!isNumber(a) || !isNumber(b)) this.fail(n, module, `"/" needs numbers`);
+        return { type: "float", code: `((float)${wrap(a.code)} / ${wrap(b.code)})`, deps };
+      case "===":
+      case "!==":
+      case "==":
+      case "!=": {
+        const op = n.operator.startsWith("=") ? "==" : "!=";
+        if (a.type === "string" || b.type === "string") {
+          if (!a.code || !b.code) this.fail(n, module, "Only plain strings can be compared on the device");
+          return boolExpr(`(strcmp(${a.code}, ${b.code}) ${op} 0)`, deps);
+        }
+        return boolExpr(`(${a.code} ${op} ${b.code})`, deps);
+      }
+      case "<":
+      case ">":
+      case "<=":
+      case ">=":
+        if (!isNumber(a) || !isNumber(b)) this.fail(n, module, `"${n.operator}" needs numbers`);
+        return boolExpr(`(${a.code} ${n.operator} ${b.code})`, deps);
+      default:
+        this.fail(n, module, `The operator "${n.operator}" ${LATER}`);
+    }
+  }
+
+  private call(n: t.CallExpression, scope: Scope, module: Module): Expr {
+    const callee = unwrap(n.callee);
+
+    if (callee.type === "MemberExpression" && !callee.computed && callee.property.type === "Identifier") {
+      const method = callee.property.name;
+      if (callee.object.type === "Identifier" && callee.object.name === "Math") return this.mathCall(method, n, scope, module);
+      if (method === "toFixed") {
+        const value = this.expr(callee.object, scope, module);
+        const digits = n.arguments[0] ?? { type: "NumericLiteral", value: 0 };
+        if (digits.type !== "NumericLiteral") this.fail(n, module, "toFixed needs a literal number of digits");
+        return strExpr({ k: "float", code: value.code, decimals: digits.value }, value.deps);
+      }
+      if (method === "toString" && n.arguments.length === 0) {
+        const value = this.expr(callee.object, scope, module);
+        return strExpr(toStr(value), value.deps);
+      }
+    }
+
+    if (callee.type === "Identifier" && callee.name === "String" && !lookup(scope, "String")) {
+      const value = this.expr(n.arguments[0], scope, module);
+      return strExpr(toStr(value), value.deps);
+    }
+
+    const resolved = this.resolveBinding(callee, scope, module);
+    if (resolved?.binding.k === "signal") {
+      const { signal } = resolved.binding;
+      const deps = new Set([signal]);
+      const code = `sig_${signal.name}`;
+      if (signal.value.base === "string") return strExpr({ k: "ptr", code, max: signal.value.maxLength ?? 0 }, deps);
+      return { type: signal.value.base, code, deps, unsigned: signal.value.unsigned };
+    }
+    if (resolved?.binding.k === "func") {
+      const { node: func, scope: funcScope, module: funcModule } = resolved.binding;
+      const args: Binding[] = n.arguments.map((a) => ({ k: "lazy", node: a as t.Expression, scope, module }));
+      return this.inlineValue(func, funcScope, args, funcModule, (value, inner) => this.expr(value, inner, funcModule));
+    }
+    this.fail(n, module, `This call ${LATER} in an expression`);
+  }
+
+  private mathCall(method: string, n: t.CallExpression, scope: Scope, module: Module): Expr {
+    const args = n.arguments.map((a) => this.expr(a, scope, module));
+    const deps = union(...args);
+    const [a, b] = args;
+    switch (method) {
+      case "round":
+        if (a.type === "int") return a;
+        return { type: "int", code: `(int32_t)floorf(${a.code} + 0.5f)`, deps };
+      case "floor":
+        return a.type === "int" ? a : { type: "int", code: `(int32_t)floorf(${a.code})`, deps };
+      case "ceil":
+        return a.type === "int" ? a : { type: "int", code: `(int32_t)ceilf(${a.code})`, deps };
+      case "trunc":
+        return a.type === "int" ? a : { type: "int", code: `(int32_t)${wrap(a.code)}`, deps };
+      case "abs":
+        return a.type === "int" ? { type: "int", code: `LV_ABS(${a.code})`, deps } : { type: "float", code: `fabsf(${a.code})`, deps };
+      case "min":
+      case "max": {
+        if (args.length !== 2) this.fail(n, module, `Math.${method} needs exactly two arguments on the device`);
+        const type: Base = a.type === "float" || b.type === "float" ? "float" : "int";
+        return { type, code: `LV_${method.toUpperCase()}(${a.code}, ${b.code})`, deps };
+      }
+      default:
+        this.fail(n, module, `Math.${method} ${LATER}`);
+    }
+  }
+
+  // ---------- Statements (event handlers) ----------
+
+  private statements(list: t.Statement[], scope: Scope, module: Module, indent: string, out: string[]) {
+    const inner = newScope(scope);
+    for (const statement of list) this.statement(statement, inner, module, indent, out);
+  }
+
+  private statement(s: t.Statement, scope: Scope, module: Module, indent: string, out: string[]) {
+    switch (s.type) {
+      case "ExpressionStatement":
+        this.effect(s.expression, scope, module, indent, out);
+        return;
+      case "BlockStatement":
+        this.statements(s.body, scope, module, indent, out);
+        return;
+      case "IfStatement": {
+        const c = this.expr(s.test, scope, module);
+        out.push(`${indent}if(${this.truthy(c, s.test, module)}) {`);
+        this.statement(s.consequent, scope, module, indent + "    ", out);
+        out.push(`${indent}}`);
+        if (s.alternate) {
+          out.push(`${indent}else {`);
+          this.statement(s.alternate, scope, module, indent + "    ", out);
+          out.push(`${indent}}`);
+        }
+        return;
+      }
+      case "VariableDeclaration": {
+        for (const decl of s.declarations) {
+          const init = decl.init && unwrap(decl.init);
+          if (decl.id.type !== "Identifier" || !init || s.kind !== "const") this.fail(decl, module, "Only `const name = value` is supported in handlers");
+          if (isFunc(init)) {
+            scope.set(decl.id.name, { k: "func", node: init, scope, module });
+            continue;
+          }
+          const value = this.expr(init, scope, module);
+          if (value.type === "string") this.fail(decl, module, `String locals in handlers ${LATER_MANY}`);
+          const name = `local_${snake(decl.id.name)}_${this.counter++}`;
+          const ctype = value.type === "bool" ? "bool" : value.type === "float" ? "float" : "int32_t";
+          out.push(`${indent}const ${ctype} ${name} = ${value.code};`);
+          scope.set(decl.id.name, { k: "value", expr: { type: value.type, code: name, deps: noDeps() } });
+        }
+        return;
+      }
+      case "ReturnStatement":
+        if (!s.argument) {
+          out.push(`${indent}return;`);
+          return;
+        }
+        this.fail(s, module, "Event handlers can't return a value");
+        break;
+      default:
+        this.fail(s, module, `This statement (${s.type}) ${LATER} in a handler`);
+    }
+  }
+
+  /** An expression evaluated for what it does: setting a signal, calling an action. */
+  private effect(node: t.Node, scope: Scope, module: Module, indent: string, out: string[]) {
+    const n = unwrap(node);
+    if (n.type === "LogicalExpression" && n.operator === "&&") {
+      const c = this.expr(n.left, scope, module);
+      out.push(`${indent}if(${this.truthy(c, n.left, module)}) {`);
+      this.effect(n.right, scope, module, indent + "    ", out);
+      out.push(`${indent}}`);
+      return;
+    }
+    if (n.type === "ConditionalExpression") {
+      const c = this.expr(n.test, scope, module);
+      out.push(`${indent}if(${this.truthy(c, n.test, module)}) {`);
+      this.effect(n.consequent, scope, module, indent + "    ", out);
+      out.push(`${indent}}`, `${indent}else {`);
+      this.effect(n.alternate, scope, module, indent + "    ", out);
+      out.push(`${indent}}`);
+      return;
+    }
+    if (n.type !== "CallExpression") this.fail(n, module, "Handlers can only call functions, set signals and call actions");
+
+    const resolved = this.resolveBinding(n.callee, scope, module);
+    if (!resolved) this.fail(n, module, `This call ${LATER} in a handler`);
+    const { binding } = resolved;
+    switch (binding.k) {
+      case "setter":
+        this.setterCall(binding.signal, n.arguments[0], scope, module, indent, out);
+        return;
+      case "action":
+        this.actionCall(binding.action, n, scope, module, indent, out);
+        return;
+      case "func": {
+        const args: Binding[] = n.arguments.map((a) => ({ k: "lazy", node: a as t.Expression, scope, module }));
+        this.inlineHandler(binding, args, indent, out);
+        return;
+      }
+      default:
+        this.fail(n, module, "Only setters, actions and your own functions can be called from a handler");
+    }
+  }
+
+  private inlineHandler(func: Extract<Binding, { k: "func" }>, args: Binding[], indent: string, out: string[]) {
+    const inner = this.bindParams(func.node, args, func.scope, func.module);
+    if (func.node.body.type === "BlockStatement") this.statements(func.node.body.body, inner, func.module, indent, out);
+    else this.effect(func.node.body, inner, func.module, indent, out);
+  }
+
+  private setterCall(signal: Signal, arg: t.Node | undefined, scope: Scope, module: Module, indent: string, out: string[]) {
+    if (!arg) this.fail(arg ?? ({} as t.Node), module, "A setter needs a value");
+    if (isFunc(unwrap(arg))) this.fail(arg, module, `Passing a function to a setter ${LATER}. Read the signal instead.`);
+    const value = this.expr(arg, scope, module);
+    if (value.type === "float" && signal.value.base === "int" && signal.kind === "local") {
+      this.onDemote((signal as Signal & { key: string }).key);
+    }
+    if (value.type === "string" || (value.type === "bool") !== (signal.value.base === "bool")) {
+      this.fail(arg, module, `This value doesn't match the signal's type (${signal.value.base})`);
+    }
+    out.push(`${indent}set_${signal.name}(${value.code});`);
+  }
+
+  private actionCall(action: Action, n: t.CallExpression, scope: Scope, module: Module, indent: string, out: string[]) {
+    const shape = n.arguments[0] && unwrap(n.arguments[0]);
+    if (shape?.type !== "ObjectExpression") this.fail(n, module, "Call actions with an object of named arguments");
+    const given = new Map<string, t.Node>();
+    for (const p of shape.properties) {
+      if (p.type === "ObjectProperty" && p.key.type === "Identifier") {
+        given.set(snake(p.key.name), p.value);
+      } else if (p.type === "ObjectMethod" || p.type === "SpreadElement" || p.type === "ObjectProperty") {
+        this.fail(p, module, `This kind of property ${LATER}`);
+      }
+    }
+    const args = action.params.map((param) => {
+      const arg = given.get(param.name);
+      if (!arg) this.fail(n, module, `Missing argument "${param.name}" for ${action.name}`);
+      const value = this.expr(arg, scope, module);
+      if (param.base === "string") {
+        if (!value.code) this.fail(arg, module, "Action strings must be plain strings on the device");
+        return value.code;
+      }
+      return `(${param.ctype})${wrap(value.code)}`;
+    });
+    out.push(`${indent}if(actions.${action.name}) actions.${action.name}(${args.join(", ")});`);
+  }
+
+  // ---------- JSX ----------
+
+  private newObject(widget: Widget, base: string, place: Place): Obj {
+    const name = this.unique(`o_${base.replace(/[^a-zA-Z0-9]/g, "_")}`);
+    const obj: Obj = { name, isStatic: false };
+    this.program.objects.push(obj);
+    this.program.usedWidgets.add(widget);
+    this.program.init.push({ op: "create", obj, widget, parent: place.parent });
+    if (place.roots) place.roots.push(obj);
+    return obj;
+  }
+
+  private line(text: string) {
+    this.program.init.push({ op: "line", text });
+  }
+
+  /** Runs `body` now if nothing can change it, and whenever a dependency changes otherwise. */
+  private bind(kind: string, deps: Set<Signal>, obj: Obj | undefined, body: string[]) {
+    if (deps.size === 0) {
+      this.line(body.length > 1 ? `{ ${body.join(" ")} }` : body[0]);
+      return;
+    }
+    if (obj) obj.isStatic = true;
+    const bind: Bind = { name: `bind_${this.program.binds.length}_${kind}`, body };
+    this.program.binds.push(bind);
+    for (const signal of deps) signal.binds.push(bind);
+  }
+
+  private inlineComponent(func: Extract<Binding, { k: "func" }>, props: Binding, caller: Module, place: Place) {
+    void caller;
+    this.instance++;
+    const inner = this.bindParams(func.node, [props], func.scope, func.module);
+    const { value, statements } = this.returned(func.node, func.module);
+    for (const statement of statements) this.declare(statement, inner, func.module, place.guard);
+    this.child(value, inner, func.module, place);
+  }
+
+  /** True for `props.children` when the component was used with no children. */
+  private isEmptyChildren(n: t.Node, scope: Scope, module: Module): boolean {
+    if (n.type !== "MemberExpression" || n.computed || n.property.type !== "Identifier" || n.property.name !== "children") return false;
+    const object = this.resolveBinding(n.object, scope, module);
+    return object?.binding.k === "props" && !object.binding.children;
+  }
+
+  private isJsxLike(node: t.Node, scope: Scope, module: Module): boolean {
+    const n = unwrap(node);
+    switch (n.type) {
+      case "JSXElement":
+      case "JSXFragment":
+        return true;
+      case "ConditionalExpression":
+        return this.isJsxLike(n.consequent, scope, module) || this.isJsxLike(n.alternate, scope, module);
+      case "LogicalExpression":
+        return this.isJsxLike(n.right, scope, module);
+      case "MemberExpression":
+      case "Identifier": {
+        if (this.isEmptyChildren(n, scope, module)) return true;
+        const resolved = this.resolveBinding(n, scope, module);
+        if (resolved?.binding.k === "children") return true;
+        if (resolved?.binding.k === "lazy") return this.isJsxLike(resolved.binding.node, resolved.binding.scope, resolved.binding.module);
+        return false;
+      }
+      case "CallExpression": {
+        const resolved = this.resolveBinding(n.callee, scope, module);
+        if (resolved?.binding.k !== "func") return false;
+        const { value } = this.returned(resolved.binding.node, resolved.binding.module);
+        return this.isJsxLike(value, resolved.binding.scope, resolved.binding.module);
+      }
+      default:
+        return false;
+    }
+  }
+
+  private child(node: t.Node, scope: Scope, module: Module, place: Place) {
+    const n = unwrap(node);
+    switch (n.type) {
+      case "JSXElement":
+        this.element(n, scope, module, place);
+        return;
+      case "JSXFragment":
+        this.children(n.children, scope, module, place);
+        return;
+      case "ConditionalExpression":
+        this.branches(
+          [
+            { test: this.expr(n.test, scope, module), body: (p) => this.child(n.consequent, scope, module, p) },
+            { test: undefined, body: (p) => this.child(n.alternate, scope, module, p) },
+          ],
+          place,
+          n,
+          module,
+        );
+        return;
+      case "LogicalExpression":
+        if (n.operator !== "&&") this.fail(n, module, `${n.operator} ${LATER} around JSX`);
+        this.branches([{ test: this.expr(n.left, scope, module), body: (p) => this.child(n.right, scope, module, p) }], place, n, module);
+        return;
+      case "Identifier":
+      case "MemberExpression": {
+        if (this.isEmptyChildren(n, scope, module)) return;
+        const resolved = this.resolveBinding(n, scope, module);
+        if (resolved?.binding.k === "children") {
+          this.children(resolved.binding.nodes, resolved.binding.scope, resolved.binding.module, place);
+          return;
+        }
+        if (resolved?.binding.k === "lazy") {
+          this.child(resolved.binding.node, resolved.binding.scope, resolved.binding.module, place);
+          return;
+        }
+        this.fail(n, module, "Expected an element here");
+        break;
+      }
+      case "CallExpression": {
+        const resolved = this.resolveBinding(n.callee, scope, module);
+        if (resolved?.binding.k !== "func") this.fail(n, module, "Expected an element here");
+        const args: Binding[] = n.arguments.map((a) => ({ k: "lazy", node: a as t.Expression, scope, module }));
+        const inner = this.bindParams(resolved.binding.node, args, resolved.binding.scope, resolved.binding.module);
+        const { value, statements } = this.returned(resolved.binding.node, resolved.binding.module);
+        for (const statement of statements) this.declare(statement, inner, resolved.binding.module, place.guard);
+        this.child(value, inner, resolved.binding.module, place);
+        return;
+      }
+      default:
+        this.fail(n, module, `This (${n.type}) can't be a child here`);
+    }
+  }
+
+  private children(nodes: JsxChild[], scope: Scope, module: Module, place: Place) {
+    for (const node of nodes) {
+      if (node.type === "JSXText") {
+        if (trimJsxText(node.value).trim()) this.fail(node, module, "Text can't go directly inside this element. Wrap it in a <label>.");
+      } else if (node.type === "JSXExpressionContainer") {
+        if (node.expression.type !== "JSXEmptyExpression") this.child(node.expression, scope, module, place);
+      } else if (node.type === "JSXSpreadChild") {
+        this.fail(node, module, `Spread children ${LATER_MANY}`);
+      } else {
+        this.child(node, scope, module, place);
+      }
+    }
+  }
+
+  /** <Show>, <Switch> and conditional JSX: builds every branch and shows the first that matches. */
+  private branches(list: { test: Expr | undefined; body: (place: Place) => void }[], place: Place, node: t.Node, module: Module) {
+    const chain: string[] = [];
+    const deps = union(place.guard, ...list.map((b) => b.test));
+    const roots: Obj[][] = [];
+
+    list.forEach((branch, index) => {
+      const test = branch.test ? this.truthy(branch.test, node, module) : "true";
+      const earlier = chain.map((c) => `!${wrap(c)}`);
+      const conds = [...(place.guard ? [place.guard.code] : []), ...earlier, test];
+      chain.push(test);
+      const guard = boolExpr(conds.length > 1 ? `(${conds.join(" && ")})` : conds[0], deps);
+      const branchRoots: Obj[] = [];
+      branch.body({ parent: place.parent, guard, roots: branchRoots });
+      roots.push(branchRoots);
+      if (place.roots) place.roots.push(...branchRoots);
+      void index;
+    });
+
+    let select = "-1";
+    for (let i = list.length - 1; i >= 0; i--) select = `${wrap(chain[i])} ? ${i} : ${select}`;
+    if (place.guard) select = `${wrap(place.guard.code)} ? (${select}) : -1`;
+
+    const body = [`int32_t active = ${select};`];
+    roots.forEach((branchRoots, i) => {
+      for (const obj of branchRoots) {
+        obj.isStatic = true;
+        body.push(`lv_obj_set_hidden(${obj.name}, active != ${i});`);
+      }
+    });
+    if (deps.size === 0) {
+      this.line(`{ ${body.join(" ")} }`);
+      return;
+    }
+    this.bind("branch", deps, undefined, body);
+  }
+
+  private attributes(el: t.JSXElement, module: Module) {
+    const attrs: { name: string; value: t.Node | undefined; node: t.Node }[] = [];
+    for (const attr of el.openingElement.attributes) {
+      if (attr.type === "JSXSpreadAttribute") this.fail(attr, module, `Spread props ${LATER_MANY}`);
+      if (attr.name.type !== "JSXIdentifier") this.fail(attr, module, `Namespaced props ${LATER_MANY}`);
+      let value: t.Node | undefined;
+      if (attr.value?.type === "JSXExpressionContainer") value = attr.value.expression;
+      else if (attr.value) value = attr.value;
+      attrs.push({ name: attr.name.name, value, node: attr });
+    }
+    return attrs;
+  }
+
+  private element(el: t.JSXElement, scope: Scope, module: Module, place: Place) {
+    const nameNode = el.openingElement.name;
+    if (nameNode.type !== "JSXIdentifier") this.fail(nameNode, module, `This element name ${LATER}`);
+    const tag = nameNode.name;
+    const widget = WIDGETS[tag];
+    if (widget) {
+      this.widget(el, widget, scope, module, place);
+      return;
+    }
+
+    const binding = lookup(scope, tag);
+    if (binding?.k === "rippel") {
+      this.builtin(el, binding.name, scope, module, place);
+      return;
+    }
+    if (binding?.k !== "func") this.fail(nameNode, module, `Unknown element <${tag}>`);
+
+    const props = new Map<string, Binding>();
+    for (const { name, value } of this.attributes(el, module)) {
+      const node = (value ?? { type: "BooleanLiteral", value: true }) as t.Expression;
+      if (node.type === "StringLiteral" || value === undefined) {
+        props.set(name, { k: "lazy", node, scope, module });
+      } else if (isFunc(unwrap(node))) {
+        props.set(name, { k: "func", node: unwrap(node) as FuncNode, scope, module });
+      } else {
+        props.set(name, { k: "lazy", node, scope, module });
+      }
+    }
+    const children: Binding | undefined = el.children.length ? { k: "children", nodes: el.children, scope, module } : undefined;
+    this.inlineComponent(binding, { k: "props", props, children }, module, place);
+  }
+
+  private builtin(el: t.JSXElement, name: string, scope: Scope, module: Module, place: Place) {
+    const attrs = this.attributes(el, module);
+    const attr = (key: string) => attrs.find((a) => a.name === key)?.value;
+
+    if (name === "Show") {
+      const when = attr("when");
+      if (!when) this.fail(el, module, "<Show> needs a `when` prop");
+      const fallback = attr("fallback");
+      const list: Parameters<Compiler["branches"]>[0] = [
+        { test: this.expr(when, scope, module), body: (p) => this.children(el.children, scope, module, p) },
+      ];
+      if (fallback) list.push({ test: undefined, body: (p) => this.child(fallback, scope, module, p) });
+      this.branches(list, place, el, module);
+      return;
+    }
+
+    if (name === "Switch") {
+      const list: Parameters<Compiler["branches"]>[0] = [];
+      for (const child of el.children) {
+        if (child.type === "JSXText" && !child.value.trim()) continue;
+        const nameNode = child.type === "JSXElement" ? child.openingElement.name : undefined;
+        const isMatch = nameNode?.type === "JSXIdentifier" && lookup(scope, nameNode.name)?.k === "rippel" && (lookup(scope, nameNode.name) as { name: string }).name === "Match";
+        if (child.type !== "JSXElement" || !isMatch) this.fail(child, module, "<Switch> can only contain <Match> elements");
+        const when = this.attributes(child, module).find((a) => a.name === "when")?.value;
+        if (!when) this.fail(child, module, "<Match> needs a `when` prop");
+        list.push({ test: this.expr(when, scope, module), body: (p) => this.children(child.children, scope, module, p) });
+      }
+      const fallback = attr("fallback");
+      if (fallback) list.push({ test: undefined, body: (p) => this.child(fallback, scope, module, p) });
+      this.branches(list, place, el, module);
+      return;
+    }
+
+    this.fail(el, module, `<${name}> ${LATER}. It's planned for M3.`);
+  }
+
+  private widget(el: t.JSXElement, widget: Widget, scope: Scope, module: Module, place: Place) {
+    const attrs = this.attributes(el, module);
+    const classAttr = attrs.find((a) => a.name === "class");
+    const firstClass = classAttr?.value?.type === "StringLiteral" ? classAttr.value.value.trim().split(/\s+/)[0] : undefined;
+    const obj = this.newObject(widget, firstClass ?? widget, place);
+    const childPlace: Place = { parent: obj, guard: place.guard, roots: undefined };
+
+    const range = { min: undefined as Expr | undefined, max: undefined as Expr | undefined };
+    let rangeEmitted = false;
+    const ranged = widget === "slider" || widget === "arc" || widget === "bar";
+    const emitRange = () => {
+      if (rangeEmitted || (!range.min && !range.max)) return;
+      rangeEmitted = true;
+      const min = range.min ?? intLit(0);
+      const max = range.max ?? intLit(100);
+      this.bind("range", union(min, max), obj, [`rp_${widget}_set_range(${obj.name}, ${min.code}, ${max.code});`]);
+    };
+
+    for (const { name, value, node } of attrs) {
+      const boolValue = (): Expr => {
+        if (!value) return boolExpr("true", noDeps());
+        const e = this.expr(value, scope, module);
+        return boolExpr(this.truthy(e, node, module), e.deps);
+      };
+
+      if (name.startsWith("on")) {
+        this.eventHandler(obj, widget, name, value, scope, module);
+        continue;
+      }
+
+      switch (name) {
+        case "class":
+          this.classes(obj, value, scope, module);
+          break;
+        case "style":
+          this.inlineStyle(obj, value, scope, module);
+          break;
+        case "id": {
+          if (value?.type !== "StringLiteral") this.fail(node, module, "`id` must be a string");
+          obj.handle = snake(value.value).toUpperCase();
+          obj.isStatic = true;
+          break;
+        }
+        case "hidden": {
+          if (place.roots) this.fail(node, module, "`hidden` can't be used on the top element of a <Show> or <Switch> branch in the device build");
+          const e = boolValue();
+          this.bind("hidden", e.deps, obj, [`lv_obj_set_hidden(${obj.name}, ${e.code});`]);
+          break;
+        }
+        case "disabled": {
+          const e = boolValue();
+          this.bind("disabled", e.deps, obj, [`rp_obj_set_state(${obj.name}, LV_STATE_DISABLED, ${e.code});`]);
+          break;
+        }
+        case "checked": {
+          const e = boolValue();
+          this.bind("checked", e.deps, obj, [`rp_obj_set_state(${obj.name}, LV_STATE_CHECKED, ${e.code});`]);
+          break;
+        }
+        case "min":
+        case "max":
+          if (!ranged || !value) this.fail(node, module, `<${widget}> has no "${name}" prop`);
+          range[name] = this.number(value, scope, module);
+          break;
+        case "value": {
+          if (!ranged || !value) this.fail(node, module, `<${widget}> has no "value" prop`);
+          emitRange();
+          const e = this.number(value, scope, module);
+          this.bind("value", e.deps, obj, [`rp_${widget}_set_value(${obj.name}, ${e.code});`]);
+          break;
+        }
+        case "readonly": {
+          if (widget !== "arc") this.fail(node, module, `<${widget}> has no "readonly" prop`);
+          const e = boolValue();
+          this.bind("readonly", e.deps, obj, [`rp_arc_set_readonly(${obj.name}, ${e.code});`]);
+          break;
+        }
+        case "scroll": {
+          if (widget !== "view") this.fail(node, module, `<${widget}> has no "scroll" prop`);
+          const e = boolValue();
+          this.bind("scroll", e.deps, obj, [`rp_view_set_scroll(${obj.name}, ${e.code});`]);
+          break;
+        }
+        default:
+          this.fail(node, module, `Unknown prop "${name}" on <${widget}>`);
+      }
+    }
+    emitRange();
+
+    this.widgetChildren(el, widget, obj, childPlace, scope, module);
+  }
+
+  private number(node: t.Node, scope: Scope, module: Module): Expr {
+    const e = this.expr(node, scope, module);
+    if (e.type === "int") return e;
+    if (e.type === "float") return { ...e, code: `(int32_t)floorf(${e.code} + 0.5f)`, type: "int" };
+    this.fail(node, module, "Expected a number");
+  }
+
+  private textOf(children: JsxChild[], scope: Scope, module: Module): { node: StrNode; deps: Set<Signal> } | undefined {
+    const parts: StrNode[] = [];
+    const deps = noDeps();
+    for (const child of children) {
+      if (child.type === "JSXText") {
+        const text = trimJsxText(child.value);
+        if (text) parts.push({ k: "lit", v: text });
+      } else if (child.type === "JSXExpressionContainer" && child.expression.type !== "JSXEmptyExpression") {
+        const value = this.expr(child.expression, scope, module);
+        parts.push(toStr(value));
+        for (const d of value.deps) deps.add(d);
+      }
+    }
+    if (!parts.length) return undefined;
+    return { node: parts.length === 1 ? parts[0] : { k: "cat", parts }, deps };
+  }
+
+  private widgetChildren(el: t.JSXElement, widget: Widget, obj: Obj, place: Place, scope: Scope, module: Module) {
+    if (widget === "label") {
+      const text = this.textOf(el.children, scope, module);
+      if (text) this.bind("text", text.deps, obj, setText(obj.name, text.node));
+      return;
+    }
+
+    if (widget === "button") {
+      const isElement = (c: JsxChild) =>
+        c.type === "JSXElement" ||
+        c.type === "JSXFragment" ||
+        (c.type === "JSXExpressionContainer" && c.expression.type !== "JSXEmptyExpression" && this.isJsxLike(c.expression, scope, module));
+      const textChildren = el.children.filter((c) => !isElement(c));
+      const text = this.textOf(textChildren, scope, module);
+      if (text) {
+        const label = this.newObject("label", `${obj.name.slice(2)}_text`, { parent: obj, guard: place.guard, roots: undefined });
+        this.line(`rp_obj_center(${label.name});`);
+        this.bind("text", text.deps, label, setText(label.name, text.node));
+      }
+      this.children(el.children.filter(isElement), scope, module, place);
+      return;
+    }
+
+    this.children(el.children, scope, module, place);
+  }
+
+  private eventHandler(obj: Obj, widget: Widget, name: string, value: t.Node | undefined, scope: Scope, module: Module) {
+    const EVENTS: Record<string, string> = {
+      onClick: "LV_EVENT_CLICKED",
+      onPress: "LV_EVENT_PRESSED",
+      onRelease: "LV_EVENT_RELEASED",
+      onLongPress: "LV_EVENT_LONG_PRESSED",
+      onFocus: "LV_EVENT_FOCUSED",
+      onBlur: "LV_EVENT_DEFOCUSED",
+    };
+    const valued = widget === "slider" || widget === "arc";
+    if (valued) {
+      EVENTS.onInput = "LV_EVENT_VALUE_CHANGED";
+      EVENTS.onChange = "LV_EVENT_RELEASED";
+    }
+    const event = EVENTS[name];
+    if (!event) this.fail(value ?? ({} as t.Node), module, `<${widget}> has no "${name}" event`);
+    if (!value) this.fail({} as t.Node, module, `"${name}" needs a function`);
+
+    const body: string[] = [];
+    const takesValue = name === "onInput" || name === "onChange";
+    const valueExpr: Expr = { type: "int", code: "value", deps: noDeps() };
+    const args: Binding[] = takesValue ? [{ k: "value", expr: valueExpr }] : [];
+
+    const n = unwrap(value);
+    if (isFunc(n)) {
+      this.inlineHandler({ k: "func", node: n, scope, module }, args, "", body);
+    } else {
+      const resolved = this.resolveBinding(n, scope, module);
+      if (resolved?.binding.k === "setter") {
+        if (!takesValue) this.fail(n, module, `${name} has no value to pass to a setter`);
+        body.push(`set_${resolved.binding.signal.name}(value);`);
+      } else if (resolved?.binding.k === "func") {
+        this.inlineHandler(resolved.binding, args, "", body);
+      } else {
+        this.fail(n, module, `"${name}" needs a function`);
+      }
+    }
+
+    const handler: Handler = { name: `on_${this.program.handlers.length}${snake(name.slice(2))}`, body };
+    if (takesValue) handler.valueGetter = `lv_${widget}_get_value`;
+    this.program.handlers.push(handler);
+    this.line(`rp_obj_on(${obj.name}, ${handler.name}, ${event});`);
+  }
+
+  private classes(obj: Obj, value: t.Node | undefined, scope: Scope, module: Module) {
+    if (!value) return;
+    const alternatives = this.classAlternatives(value, scope, module);
+    const words = (text: string) => text.split(/\s+/).filter(Boolean);
+
+    if (alternatives.length === 1 && alternatives[0].conds.length === 0) {
+      for (const line of this.input.styles.add(obj.name, words(alternatives[0].text))) this.line(line);
+      return;
+    }
+
+    const all = [...new Set(alternatives.flatMap((a) => words(a.text)))];
+    const deps = union(...alternatives.flatMap((a) => a.conds));
+    let select = `${alternatives.length - 1}`;
+    for (let i = alternatives.length - 2; i >= 0; i--) {
+      select = `${alternatives[i].conds.map((c) => wrap(c.code)).join(" && ")} ? ${i} : ${select}`;
+    }
+
+    const body = [
+      "static int32_t applied = -1;",
+      `const int32_t next = ${select};`,
+      "if(next == applied) return;",
+      "applied = next;",
+      ...this.input.styles.remove(obj.name, all),
+      "switch(next) {",
+    ];
+    alternatives.forEach((alt, i) => {
+      body.push(`case ${i}:`, ...this.input.styles.add(obj.name, words(alt.text)), "break;");
+    });
+    body.push("}");
+    this.bind("class", deps, obj, body);
+  }
+
+  /** Expands a class expression into every string it can produce and when it produces it. */
+  private classAlternatives(node: t.Node, scope: Scope, module: Module): { conds: Expr[]; text: string }[] {
+    const n = unwrap(node);
+    switch (n.type) {
+      case "StringLiteral":
+        return [{ conds: [], text: n.value }];
+      case "ConditionalExpression": {
+        const c = this.expr(n.test, scope, module);
+        const yes = boolExpr(this.truthy(c, n.test, module), c.deps);
+        const no = boolExpr(`!${wrap(yes.code)}`, c.deps);
+        return [
+          ...this.classAlternatives(n.consequent, scope, module).map((a) => ({ conds: [yes, ...a.conds], text: a.text })),
+          ...this.classAlternatives(n.alternate, scope, module).map((a) => ({ conds: [no, ...a.conds], text: a.text })),
+        ];
+      }
+      case "TemplateLiteral": {
+        let results: { conds: Expr[]; text: string }[] = [{ conds: [], text: "" }];
+        n.quasis.forEach((quasi, i) => {
+          results = results.map((r) => ({ ...r, text: r.text + (quasi.value.cooked ?? "") }));
+          const e = n.expressions[i];
+          if (e) {
+            const options = this.classAlternatives(e, scope, module);
+            results = results.flatMap((r) => options.map((o) => ({ conds: [...r.conds, ...o.conds], text: r.text + o.text })));
+          }
+        });
+        return results;
+      }
+      case "Identifier":
+      case "MemberExpression": {
+        const resolved = this.resolveBinding(n, scope, module);
+        if (resolved?.binding.k === "lazy") return this.classAlternatives(resolved.binding.node, resolved.binding.scope, resolved.binding.module);
+        this.fail(n, module, "The device build needs to see every class name at compile time");
+        break;
+      }
+      case "CallExpression": {
+        const resolved = this.resolveBinding(n.callee, scope, module);
+        if (resolved?.binding.k !== "func") this.fail(n, module, "The device build needs to see every class name at compile time");
+        const args: Binding[] = n.arguments.map((a) => ({ k: "lazy", node: a as t.Expression, scope, module }));
+        const inner = this.bindParams(resolved.binding.node, args, resolved.binding.scope, resolved.binding.module);
+        const { value, statements } = this.returned(resolved.binding.node, resolved.binding.module);
+        for (const statement of statements) this.declare(statement, inner, resolved.binding.module);
+        return this.classAlternatives(value, inner, resolved.binding.module);
+      }
+      default:
+        this.fail(n, module, "The device build needs to see every class name at compile time");
+    }
+  }
+
+  private inlineStyle(obj: Obj, value: t.Node | undefined, scope: Scope, module: Module) {
+    const n = value && unwrap(value);
+    if (n?.type !== "ObjectExpression") this.fail(value ?? ({} as t.Node), module, "`style` must be an object literal");
+    const style: Record<string, string | number> = {};
+    for (const p of n.properties) {
+      if (p.type !== "ObjectProperty" || p.key.type !== "Identifier") this.fail(p, module, `This kind of property ${LATER}`);
+      const v = unwrap(p.value);
+      if (v.type === "StringLiteral" || v.type === "NumericLiteral") style[p.key.name] = v.value;
+      else this.fail(p.value, module, `Inline styles that change at runtime ${LATER_MANY}. They're planned for M3.`);
+    }
+    let decls: StyleDecl[];
+    try {
+      decls = translateDeclarations(inlineDeclarations(style), this.input.styleContext);
+    } catch (err) {
+      this.fail(n, module, err instanceof Error ? err.message : String(err));
+    }
+    for (const { prop, value: v } of decls) {
+      switch (v.t) {
+        case "num": this.line(`rp_obj_set_local_num(${obj.name}, ${prop}, ${v.v}, LV_PART_MAIN);`); break;
+        case "pct": this.line(`rp_obj_set_local_num(${obj.name}, ${prop}, lv_pct(${v.v}), LV_PART_MAIN);`); break;
+        case "content": this.line(`rp_obj_set_local_num(${obj.name}, ${prop}, LV_SIZE_CONTENT, LV_PART_MAIN);`); break;
+        case "const": this.line(`rp_obj_set_local_num(${obj.name}, ${prop}, ${v.v}, LV_PART_MAIN);`); break;
+        case "color": this.line(`rp_obj_set_local_color(${obj.name}, ${prop}, 0x${v.v.toString(16).padStart(6, "0")}, LV_PART_MAIN);`); break;
+        case "font": this.line(`rp_obj_set_local_ptr(${obj.name}, ${prop}, &${this.input.fontSymbol(v.family, v.size)}, LV_PART_MAIN);`); break;
+        case "transition": this.fail(n, module, "`transition` only works in a stylesheet");
+      }
+    }
+  }
+}
+
+/**
+ * Compiles the UI. Runs until local number signals have settled on int or
+ * float, since a later assignment can turn a signal into a float.
+ */
+export function compileUi(input: CompileInput): UiProgram {
+  const floats = new Set<string>();
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false;
+    const compiler = new Compiler(input, floats, (key) => {
+      if (!floats.has(key)) {
+        floats.add(key);
+        changed = true;
+      }
+    });
+    const program = compiler.run();
+    if (changed) continue;
+    if (input.fpu === "none" && program.signals.some((s) => s.value.base === "float")) {
+      program.warnings.push("The UI uses fractional numbers on an MCU with no FPU, so they'll be computed in software.");
+    }
+    return program;
+  }
+  throw new Error("Number types didn't settle while compiling the UI");
+}
+
+export function cssImportOrder(entry: string): string[] {
+  const sheets: string[] = [];
+  const seen = new Set<string>();
+  const visit = (file: string) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const ast = parseSync(readFileSync(file, "utf8"), {
+      filename: file,
+      babelrc: false,
+      configFile: false,
+      sourceType: "module",
+      parserOpts: { plugins: ["jsx", "typescript"] },
+    });
+    for (const statement of ast?.program.body ?? []) {
+      if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue;
+      const source = statement.source.value;
+      if (!source.startsWith(".")) continue;
+      const base = resolve(dirname(file), source);
+      if (source.endsWith(".css")) {
+        if (!seen.has(base)) {
+          seen.add(base);
+          sheets.push(base);
+        }
+        continue;
+      }
+      const target = [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`].find((c) => existsSync(c) && /\.tsx?$/.test(c));
+      if (target) visit(target);
+    }
+  };
+  visit(entry);
+  return sheets;
+}

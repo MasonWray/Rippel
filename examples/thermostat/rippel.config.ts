@@ -1,12 +1,16 @@
 import { defineConfig } from "rippel";
-import { adafruit_2_8_tft } from "rippel/displays";
+import { adafruit_3_5_tft } from "rippel/displays";
 import { esp32s3 } from "rippel/mcu";
 
 export default defineConfig({
   entry: "src/App.tsx",
   contract: "src/firmware.contract.ts",
-  display: adafruit_2_8_tft({ rotation: 90 }),
-  mcu: esp32s3({ psramKB: 8192 }),
+  display: adafruit_3_5_tft({ rotation: 90 }),
+  mcu: esp32s3(),
+  output: {
+    dir: "firmware/components/ui",
+    integration: "esp-idf",
+  },
   fonts: {
     // Lato ships with LVGL's examples (SIL Open Font License).
     lato: {
