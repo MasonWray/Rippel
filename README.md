@@ -4,7 +4,7 @@ Build embedded display UIs for microcontrollers with TSX and CSS. You write the 
 
 See [docs/design.md](docs/design.md) for the design and roadmap.
 
-**Status:** milestone 1 (the browser dev runtime) works. C code generation hasn't started.
+**Status:** the browser dev runtime works, and `rippel build` generates C for the subset described in the [design doc](docs/design.md). The example thermostat runs on an ESP32-S3 with a 480×320 touch display, and its generated C matches the dev runtime pixel for pixel in the conformance check.
 
 ## Try the example
 
@@ -36,7 +36,7 @@ Wait for the boiler to heat up, pick a recipe and press **Start shot**. Things t
 - In History, sort by **Top rated** and change a rating. The rows reorder as you tap.
 - In the signals panel, drag `waterPct` below 15 to see the machine refuse to brew.
 
-The demo runs in the browser simulator. C code generation for the device comes in later milestones.
+The demo runs in the browser simulator. `rippel build` can't compile it yet, because it uses `<For>` and other features planned for M3.
 
 ## What a Rippel project looks like
 
@@ -69,6 +69,7 @@ Commands, run from a project folder:
 
 - `rippel dev` starts the browser dev runtime with hot reload.
 - `rippel check` reports code and styles the device build won't be able to compile.
+- `rippel build` generates the C code for the device into `output.dir`.
 
 ## Repository layout
 
@@ -84,11 +85,25 @@ examples/espresso/        full demo project
 docs/design.md            design doc
 ```
 
+## Run it on a device
+
+`examples/thermostat/firmware` is an ESP-IDF project for an ESP32-S3 and a 480×320 HX8357D display. The wiring is in `main/board.h`. With ESP-IDF 5.5 set up in your shell:
+
+```bash
+npm run build
+npm run build -w thermostat-example
+cd examples/thermostat/firmware
+idf.py build flash monitor
+```
+
+`rippel build` writes the UI into `firmware/components/ui`. Everything else in `firmware/` is ordinary firmware code you own: display and touch drivers, and the code that calls `ui_set_temperature` and implements the `setpoint` action.
+
 ## Working on Rippel
 
 ```bash
 npm run build      # compile the package
 npm test           # unit tests
+npm run conformance  # checks that generated C draws the same pixels as the dev runtime (needs Emscripten)
 ```
 
 The simulator WASM in `packages/rippel/wasm/` is prebuilt and committed, so you only need Emscripten if you change the C code or update LVGL:

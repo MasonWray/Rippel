@@ -1,6 +1,6 @@
 # Rippel design
 
-Status: draft. M1 (browser dev runtime) is done. Last updated 2026-11-07.
+Status: draft. M1 (browser dev runtime) and M2 (C codegen) are done. Last updated 2026-11-11.
 
 Rippel is a toolchain for building embedded display UIs with web tooling. You write the UI in TSX and CSS, preview it in the browser on the real renderer, and build it into C code that runs on a microcontroller using [LVGL](https://lvgl.io).
 
@@ -213,29 +213,48 @@ Without escape hatches, people end up editing generated code. Rippel needs:
 
 ### M2: C codegen vertical slice
 
-1. Hand-write the C we want generated for the M1 sample, and run it on the reference board.
+1. Hand-write the C we want generated for the M1 sample.
 2. Build codegen that produces equivalent C: static tree, styles, signal bindings, actions, the contract header, and `lv_conf.h`.
-3. Add ESP-IDF and plain CMake integration.
+3. Support `<Show>` and `<Switch>`, since the sample uses `<Switch>`.
+4. Compile the generated C to WASM and pixel-diff it against the dev runtime, so codegen can be tested on every change without a board.
+5. Add ESP-IDF and plain CMake integration.
+6. Run the sample on the reference board.
 
 **Done when:** the same sample runs on the reference board, built by `rippel build`, with no hand edits.
 
+**Status: done.** `rippel build` generates the thermostat, `npm run conformance` passes, and the result runs on an Adafruit QT Py ESP32-S3 with the Adafruit 3.5" 480×320 display, including touch, with no edits to generated code. How it works:
+
+- **Components are inlined** at each use. Nothing is evaluated at compile time, and there is no JS on the device.
+- **Each reactive JSX expression becomes one generated bind function.** A signal's setter compares the new value and calls the binds that read it. `lv_subject_t` isn't used: it only holds a few value types, and derived values need generated functions anyway.
+- **`<Show>` and `<Switch>` build all their branches up front** and hide the inactive ones. Memory use is predictable, but a branch keeps its objects while hidden. Components with local signals inside a branch are rejected for now, because the dev runtime resets those signals when a branch reopens.
+- **Number types are inferred.** Contract signals use their declared types. A local number signal is `int32_t` unless something assigns it a fraction, then it's `float`. `/` always produces a float. An MCU with no FPU gets a build warning instead of different behavior.
+- **`lv_conf.h` is generated** with only the widgets and Montserrat sizes the UI uses. `ui_init` sets the DPI after the display is created, in the same order as the simulator, so LVGL's theme scales the same way.
+- **The output folder includes the bridge**, so generated code and the simulator share `rippel_bridge.c`.
+- Anything outside the subset is a build error with a file and line.
+
+Notes from bringing it up on the board:
+
+- **Stack:** LVGL's software renderer needs more than ESP-IDF's default 3.5 KB main task stack. The thermostat peaked at about 4.7 KB. The example uses 16 KB. Projects that call `lv_timer_handler` from `app_main` need the same change.
+- **Touch calibration** belongs to the firmware. The raw edge values are measured per panel and live in `board.h`.
+
 ### M3 and later
 
-- `<Show>` / `<For>` / `<Switch>`, dynamic lists, and the string memory model
+- `<For>` and `<Index>`, dynamic lists, and the string memory model
+- Inline styles that change at runtime, and local string signals
+- Local signals inside `<Show>` and `<Switch>` branches
 - More widgets, images, animations, multiple screens and navigation
-- Conformance tests: compile the generated C to WASM and pixel-diff it against the dev runtime
 - Single-binary compiler (decision 10)
 - More integrations (Zephyr, PlatformIO), more MCU and display presets
 - Real custom widgets in the simulator
 
 ## Open questions
 
-1. **Numeric types.** How do users write `int16` vs. `float` in UI code? The contract uses explicit types like `i16`. Locals inside components could be inferred, or require branded types.
-2. **Signals in C.** Should we use LVGL's `lv_subject_t` (built in, works with LVGL's bind helpers, but only a few value types) or a small Rippel signal runtime? Derived values need generated update functions either way.
-3. **`<Show>` default.** Hide prebuilt objects (predictable memory) or create and destroy them (less RAM)? Probably configurable, with one default.
+1. **Numeric types (settled for now).** Inferred, as described under M2. Wider integer types for locals may be needed later.
+2. **Signals in C (settled).** Generated setters and bind functions. See M2.
+3. **`<Show>` default.** M2 hides prebuilt objects, which keeps memory predictable. Creating and destroying them could become an option for screens that are rarely open.
 4. **Dynamic lists and strings.** Ownership and allocation of firmware-provided arrays and strings in C.
 5. **LVGL version.** Pin one version per Rippel release? Allow user-supplied `lv_conf.h` overrides?
-6. **Reference MCU.** The display is the Adafruit 320×240 TFT. The MCU is undecided. An ESP32-S3 devkit is a good default (cheap, PSRAM, strong LVGL support).
+6. **Reference hardware (settled).** An Adafruit QT Py ESP32-S3 and the Adafruit 3.5" 480×320 TFT.
 7. **Package name.** `rippel` is unclaimed on npm as of 2026-11-07. Reserve it, and decide whether to use one package or a scope (`@rippel/*`).
 8. **Glyph coverage.** A character missing from the font renders as a box (the built-in Montserrat has no `·`, for example). The validator could check string literals against each font's ranges.
 9. **Prebuilt WASM in git.** Committing `wasm/` keeps contributor setup simple but adds about 1 MB per rebuild to history. Alternatives: build it in CI and publish it only in the npm package, or use Git LFS.

@@ -2,11 +2,14 @@
 /**
  * rippel dev    Start the browser dev runtime (simulated display + firmware mock panel).
  * rippel check  Validate UI code and styles without starting a server.
+ * rippel build  Generate the C code for the device.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { createServer } from "vite";
+import { buildProject } from "./codegen/build.js";
+import { CodegenError } from "./codegen/compile.js";
 import { ConfigError, loadConfig, styleContext } from "./node/load-config.js";
 import { validateSource } from "./node/validator.js";
 import { CssError, compileStyleSheet } from "./style/css.js";
@@ -17,10 +20,12 @@ const HELP = `Usage: rippel <command> [options]
 Commands:
   dev      Start the dev runtime in the browser
   check    Check UI code and styles for anything the device build can't compile
+  build    Generate C code for the device into output.dir
 
 Options:
   --port <n>   Port for the dev server (default 5173)
   --host       Listen on all network interfaces
+  --out <dir>  Where build writes (default: output.dir in rippel.config.ts)
   -h, --help   Show this help
 `;
 
@@ -80,11 +85,29 @@ async function check(root: string): Promise<number> {
   return problems ? 1 : 0;
 }
 
+async function build(root: string, out: string | undefined): Promise<number> {
+  if ((await check(root)) !== 0) return 1;
+  const config = await loadConfig(root);
+  try {
+    const result = await buildProject(config, out);
+    for (const warning of result.warnings) console.log(`Warning: ${warning}`);
+    console.log(`Generated ${result.files.length} files in ${relative(root, result.outDir) || "."}`);
+    return 0;
+  } catch (err) {
+    if (err instanceof CodegenError) {
+      console.log(`${relative(root, err.file)}:${err.line}:${err.column}  ${err.message}`);
+      return 1;
+    }
+    throw err;
+  }
+}
+
 async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       port: { type: "string" },
+      out: { type: "string" },
       host: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
@@ -100,6 +123,8 @@ async function main() {
     await dev(root, values.port ? Number(values.port) : undefined, values.host ?? false);
   } else if (command === "check") {
     process.exitCode = await check(root);
+  } else if (command === "build") {
+    process.exitCode = await build(root, values.out);
   } else {
     console.error(`Unknown command "${command}".\n\n${HELP}`);
     process.exitCode = 1;

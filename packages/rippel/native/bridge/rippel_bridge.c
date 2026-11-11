@@ -33,23 +33,34 @@ lv_obj_t * rp_obj_create(rp_widget_t type, lv_obj_t * parent)
             lv_obj_add_style(obj, &view_base, LV_PART_MAIN);
             /* Touches pass through a view to whatever is behind it, unless
              * it has a handler (rp_obj_listen) or scrolls (rp_view_set_scroll). */
-            lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_clickable(obj, false);
+            lv_obj_set_scrollable(obj, false);
             break;
         case RP_WIDGET_LABEL:
             obj = lv_label_create(parent);
             lv_label_set_text(obj, "");
             break;
+#if LV_USE_BUTTON
         case RP_WIDGET_BUTTON:
             obj = lv_button_create(parent);
             break;
+#endif
+#if LV_USE_SLIDER
         case RP_WIDGET_SLIDER:
             obj = lv_slider_create(parent);
             break;
+#endif
+#if LV_USE_ARC
         case RP_WIDGET_ARC:
             obj = lv_arc_create(parent);
             break;
+#endif
+#if LV_USE_BAR
         case RP_WIDGET_BAR:
             obj = lv_bar_create(parent);
+            break;
+#endif
+        default:
             break;
     }
     return obj;
@@ -102,25 +113,31 @@ static void forward_event(lv_event_t * e)
     }
 
     int32_t value = 0;
+#if LV_USE_SLIDER
     if(lv_obj_check_type(obj, &lv_slider_class)) value = lv_slider_get_value(obj);
-    else if(lv_obj_check_type(obj, &lv_arc_class)) value = lv_arc_get_value(obj);
+#endif
+#if LV_USE_ARC
+    if(lv_obj_check_type(obj, &lv_arc_class)) value = lv_arc_get_value(obj);
+#endif
     event_handler(obj, ev, value);
 }
 
 void rp_obj_listen(lv_obj_t * obj)
 {
-    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(obj, true);
     lv_obj_add_event_cb(obj, forward_event, LV_EVENT_ALL, NULL);
+}
+
+void rp_obj_on(lv_obj_t * obj, lv_event_cb_t cb, lv_event_code_t code)
+{
+    lv_obj_set_clickable(obj, true);
+    lv_obj_add_event_cb(obj, cb, code, NULL);
 }
 
 void rp_view_set_scroll(lv_obj_t * obj, bool scroll)
 {
-    if(scroll) {
-        lv_obj_add_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    }
-    else {
-        lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
-    }
+    lv_obj_set_scrollable(obj, scroll);
+    if(scroll) lv_obj_set_clickable(obj, true);
 }
 
 /* ---------- Widget properties ---------- */
@@ -130,6 +147,7 @@ void rp_label_set_text(lv_obj_t * obj, const char * text)
     lv_label_set_text(obj, text);
 }
 
+#if LV_USE_SLIDER
 void rp_slider_set_range(lv_obj_t * obj, int32_t min, int32_t max)
 {
     lv_slider_set_range(obj, min, max);
@@ -144,7 +162,9 @@ int32_t rp_slider_get_value(lv_obj_t * obj)
 {
     return lv_slider_get_value(obj);
 }
+#endif
 
+#if LV_USE_ARC
 void rp_arc_set_range(lv_obj_t * obj, int32_t min, int32_t max)
 {
     lv_arc_set_range(obj, min, max);
@@ -158,15 +178,17 @@ void rp_arc_set_value(lv_obj_t * obj, int32_t value)
 void rp_arc_set_readonly(lv_obj_t * obj, bool readonly)
 {
     if(readonly) {
-        lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(obj, false);
         lv_obj_set_style_opa(obj, LV_OPA_TRANSP, LV_PART_KNOB);
     }
     else {
-        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(obj, true);
         lv_obj_remove_local_style_prop(obj, LV_STYLE_OPA, LV_PART_KNOB);
     }
 }
+#endif
 
+#if LV_USE_BAR
 void rp_bar_set_range(lv_obj_t * obj, int32_t min, int32_t max)
 {
     lv_bar_set_range(obj, min, max);
@@ -176,6 +198,7 @@ void rp_bar_set_value(lv_obj_t * obj, int32_t value)
 {
     lv_bar_set_value(obj, value, LV_ANIM_OFF);
 }
+#endif
 
 /* ---------- Styles ---------- */
 

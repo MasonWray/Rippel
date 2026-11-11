@@ -545,6 +545,18 @@ export function translateDeclarations(decls: CssDeclaration[], ctx: StyleContext
   return out;
 }
 
+const UNITLESS = new Set(["opacity", "flex-grow", "flex"]);
+
+/** Turns an inline `style` object into CSS declarations. Numbers are px, except unitless properties. */
+export function inlineDeclarations(style: Record<string, string | number | undefined>): CssDeclaration[] {
+  return Object.entries(style)
+    .filter((entry): entry is [string, string | number] => entry[1] !== undefined)
+    .map(([key, value]) => {
+      const prop = cssPropertyName(key);
+      return { prop, value: typeof value === "number" && !UNITLESS.has(prop) ? `${value}px` : String(value) };
+    });
+}
+
 /** Converts a camelCase inline style key (`backgroundColor`) to its CSS name (`background-color`). */
 export function cssPropertyName(key: string): string {
   return key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);

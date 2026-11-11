@@ -6,7 +6,7 @@
  * get the styles of their classes, ordered by source order like the CSS cascade.
  */
 import type { StyleContext, StyleDecl, StyleRule } from "../style/ir.js";
-import { cssPropertyName, translateDeclarations } from "../style/translate.js";
+import { inlineDeclarations, translateDeclarations } from "../style/translate.js";
 import { lvgl, resolveValue, selectorValue, whenLvglReady } from "./host.js";
 import type { Lvgl, Ptr } from "./lvgl.js";
 
@@ -102,8 +102,6 @@ export function setClasses(node: StyledNode, value: string | undefined): void {
 
 export type InlineStyle = Record<string, string | number | undefined>;
 
-const UNITLESS = new Set(["opacity", "flex-grow", "flex"]);
-
 /** Applies an inline `style` object as LVGL local style properties, replacing the previous one. */
 export function setInlineStyle(node: StyledNode, style: InlineStyle | undefined): void {
   const lv = lvgl();
@@ -112,15 +110,8 @@ export function setInlineStyle(node: StyledNode, style: InlineStyle | undefined)
   if (!style) return;
   if (!styleContext) throw new Error("Style context isn't set");
 
-  const decls = Object.entries(style)
-    .filter((entry): entry is [string, string | number] => entry[1] !== undefined)
-    .map(([key, value]) => {
-      const prop = cssPropertyName(key);
-      return { prop, value: typeof value === "number" && !UNITLESS.has(prop) ? `${value}px` : String(value) };
-    });
-
   const selector = selectorValue(lv, { part: "LV_PART_MAIN", states: [] });
-  for (const decl of translateDeclarations(decls, styleContext)) {
+  for (const decl of translateDeclarations(inlineDeclarations(style), styleContext)) {
     if (decl.value.t === "transition") throw new Error("`transition` only works in a stylesheet, not in an inline style");
     const prop = lv.constant(decl.prop);
     const value = resolveValue(lv, decl.value);

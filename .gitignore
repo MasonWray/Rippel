@@ -6,3 +6,10 @@ dist/
 packages/rippel/wasm/build/
 *.tsbuildinfo
 packages/rippel/wasm/*.tmp*
+
+# Firmware builds and generated UI code
+examples/*/firmware/build/
+examples/*/firmware/sdkconfig
+examples/*/firmware/sdkconfig.old
+examples/*/firmware/components/ui/
+examples/*/firmware/managed_components/
