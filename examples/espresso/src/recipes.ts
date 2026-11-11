@@ -34,7 +34,7 @@ export const RECIPES: Recipe[] = [
     ],
   },
   {
-    name: "Long Bloom",
+    name: "Bloom",
     accent: "teal",
     doseTenths: 180,
     ratioTenths: 25,

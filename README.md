@@ -23,7 +23,7 @@ If you cloned without `--recursive`, run `git submodule update --init` first. Th
 
 ## See the demo
 
-`examples/espresso` is a full espresso machine UI for an 800×480 display. A scripted mock plays the firmware, so the whole thing runs on its own in the browser.
+`examples/espresso` is a full espresso machine UI for a 480×320 display. A scripted mock plays the firmware, so the whole thing runs on its own in the browser.
 
 ```bash
 npm run demo

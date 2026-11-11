@@ -38,7 +38,7 @@ export const canBrew = () => boilerReady() && !waterLow();
 
 // Live pressure trace: one signal per chart column, so each sample redraws one bar
 
-export const COLUMNS = Array.from({ length: 56 }, (_, i) => i);
+export const COLUMNS = Array.from({ length: 40 }, (_, i) => i);
 const columns = COLUMNS.map(() => createSignal(0));
 export const sample = (col: number) => columns[col][0]();
 export const peakPressure = () => Math.max(...COLUMNS.map(sample));
