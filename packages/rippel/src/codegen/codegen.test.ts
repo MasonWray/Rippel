@@ -88,8 +88,8 @@ describe("rippel build", () => {
         }
       `,
     });
-    expect(ui).toContain('lv_label_set_text(o_label, "One");');
-    expect(ui).toContain('lv_label_set_text(o_label_3, "Two");');
+    expect(ui).toContain('rp_label_set_text(o_label, "One");');
+    expect(ui).toContain('rp_label_set_text(o_label_3, "Two");');
     expect(ui).toContain("static bool sig_open = true;");
     expect(ui).toContain("static bool sig_open_2 = true;");
   });
@@ -121,6 +121,15 @@ describe("rippel build", () => {
     });
     expect(ui).toContain("const int32_t next = sig_online ? 0 : 1;");
     expect(ui).toContain("lv_obj_remove_style(o_view, &st_1_b, LV_PART_MAIN);");
+  });
+
+  it("applies only the @media rules that match the configured display", async () => {
+    const { ui } = await build({
+      ...app(`return <view class="box" />;`, `import "./app.css";`),
+      "src/app.css": `@media (max-width: 320px) { .box { width: 10px; } } @media (min-width: 321px) { .box { width: 99px; } }`,
+    });
+    expect(ui).toContain("LV_STYLE_WIDTH, 10)");
+    expect(ui).not.toContain("LV_STYLE_WIDTH, 99)");
   });
 
   it("only enables the fonts and widgets the UI uses", async () => {
@@ -158,8 +167,8 @@ describe("rippel build", () => {
 
   it("expands <For> over constant data", async () => {
     const { ui } = await build(app(`const ROWS = [{ name: "A" }, { name: "B" }]; return <view><For each={ROWS}>{(row, i) => <label>{row.name}{i()}</label>}</For></view>;`));
-    expect(ui).toContain('lv_label_set_text(o_label, "A0");');
-    expect(ui).toContain('lv_label_set_text(o_label_2, "B1");');
+    expect(ui).toContain('rp_label_set_text(o_label, "A0");');
+    expect(ui).toContain('rp_label_set_text(o_label_2, "B1");');
   });
 
   it("runs helper functions over constants at build time", async () => {
@@ -170,7 +179,7 @@ describe("rippel build", () => {
          function total(list: number[]) { let_free: for (const v of list) { if (v > 2) return v * 10; } return 0; }`.replace("let_free: ", ""),
       ),
     );
-    expect(ui).toContain('lv_label_set_text(o_label, "30");');
+    expect(ui).toContain('rp_label_set_text(o_label, "30");');
   });
 
   it("turns a table read through a signal into a lookup table", async () => {

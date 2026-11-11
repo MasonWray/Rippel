@@ -336,18 +336,18 @@ function appendStr(node: StrNode, indent: string): string[] {
 function setText(obj: string, node: StrNode): string[] {
   const parts = flattenStr(node);
   if (parts.every((p) => p.k === "lit")) {
-    return [`lv_label_set_text(${obj}, ${cString(parts.map((p) => (p as { v: string }).v).join(""))});`];
+    return [`rp_label_set_text(${obj}, ${cString(parts.map((p) => (p as { v: string }).v).join(""))});`];
   }
-  if (parts.length === 1 && isPlain(parts[0])) return [`lv_label_set_text(${obj}, ${plainCode(parts[0])});`];
+  if (parts.length === 1 && isPlain(parts[0])) return [`rp_label_set_text(${obj}, ${plainCode(parts[0])});`];
 
   const size = strBound(node) + 1;
   if (parts.every((p) => strPiece(p))) {
     const pieces = parts.map((p) => strPiece(p)!);
     const format = pieces.map((p) => p.format).join("");
     const args = pieces.flatMap((p) => p.args);
-    return [`char text[${size}];`, `snprintf(text, sizeof(text), ${[cString(format), ...args].join(", ")});`, `lv_label_set_text(${obj}, text);`];
+    return [`char text[${size}];`, `snprintf(text, sizeof(text), ${[cString(format), ...args].join(", ")});`, `rp_label_set_text(${obj}, text);`];
   }
-  return [`char text[${size}];`, "int n = 0;", ...appendStr(node, ""), `lv_label_set_text(${obj}, text);`];
+  return [`char text[${size}];`, "int n = 0;", ...appendStr(node, ""), `rp_label_set_text(${obj}, text);`];
 }
 
 function toStr(e: Expr): StrNode {

@@ -1,5 +1,6 @@
 #include "rippel_bridge.h"
 #include <stddef.h>
+#include <string.h>
 
 static rp_event_handler_t event_handler = NULL;
 
@@ -144,6 +145,9 @@ void rp_view_set_scroll(lv_obj_t * obj, bool scroll)
 
 void rp_label_set_text(lv_obj_t * obj, const char * text)
 {
+    /* LVGL reallocates, re-lays out and redraws a label even if its text is the same. */
+    const char * current = lv_label_get_text(obj);
+    if(current != NULL && strcmp(current, text) == 0) return;
     lv_label_set_text(obj, text);
 }
 

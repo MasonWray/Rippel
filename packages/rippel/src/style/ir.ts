@@ -56,4 +56,6 @@ export interface StyleContext {
   defaultFont: { family: string; size: number };
   /** Pixels per rem. */
   rem: number;
+  /** The display being built for. Needed to evaluate @media queries. */
+  display?: { width: number; height: number };
 }
