@@ -14,9 +14,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "hx8357.h"
 #include "lvgl.h"
-#include "touch.h"
+#include "rippel_board.h"
 #include "ui.h"
 
 #define MACHINE_PERIOD_MS 40
@@ -189,8 +188,8 @@ void app_main(void)
     lv_init();
     lv_tick_set_cb(tick_ms);
 
-    lv_display_t * disp = hx8357_create_display();
-    touch_create_indev(disp);
+    lv_display_t * disp = board_create_display();
+    board_create_input(disp);
 
     static const ui_actions_t actions = {
         .set_boiler_target = on_set_boiler_target,

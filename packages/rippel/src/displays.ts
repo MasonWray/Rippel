@@ -52,6 +52,18 @@ export function adafruit_3_5_tft(options: { rotation?: Rotation } = {}): Display
   };
 }
 
+/** Waveshare 1.9" LCD module (ST7789V2), 170x320 in its native portrait orientation. No touch. */
+export function waveshare_1_9_lcd(options: { rotation?: Rotation } = {}): DisplayConfig {
+  const [width, height] = rotate(170, 320, options.rotation ?? 0);
+  return {
+    name: 'Waveshare 1.9" LCD (ST7789V2)',
+    width,
+    height,
+    colorFormat: "RGB565",
+    dpi: dpiFromDiagonal(170, 320, 1.9),
+  };
+}
+
 /** ESP32-S3-BOX-3: 320x240 ILI9342C, 2.4". */
 export function esp32_s3_box_3(): DisplayConfig {
   return {

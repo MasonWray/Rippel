@@ -1,0 +1,15 @@
+CONFIG_IDF_TARGET="esp32c6"
+
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+
+# LVGL renders on the main task, and its software renderer overflows the default 3.5 KB stack.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Use the lv_conf.h that `rippel build` generates, not LVGL's Kconfig options.
+CONFIG_LV_CONF_SKIP=n
+
+# LVGL's examples and demos need widgets this UI has turned off.
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n

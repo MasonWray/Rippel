@@ -27,6 +27,12 @@ export interface RippelConfig {
   defaultFont?: { family: string; size: number };
   /** Pixels per rem. Defaults to 16. */
   rem?: number;
+  /**
+   * Other hardware the same UI runs on. Each target overrides these settings,
+   * and `--target <name>` on any command selects it. `@media` queries see the
+   * selected target's display.
+   */
+  targets?: Record<string, TargetConfig>;
   /** Where `rippel build` writes generated C (used from M2). */
   output?: {
     dir: string;
@@ -35,6 +41,9 @@ export interface RippelConfig {
     lvglHeapKB?: number;
   };
 }
+
+/** The settings a target can override. */
+export type TargetConfig = Partial<Pick<RippelConfig, "display" | "mcu" | "output" | "fonts" | "defaultFont" | "rem">>;
 
 /** Identity helper that gives rippel.config.ts type checking and autocompletion. */
 export function defineConfig(config: RippelConfig): RippelConfig {

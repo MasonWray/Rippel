@@ -1,0 +1,7 @@
+[
+  { "name": "room gets warmer", "signal": "temperature", "value": 25 },
+  { "name": "room gets colder", "signal": "temperature", "value": 18 },
+  { "name": "goes offline", "signal": "online", "value": false },
+  { "name": "battery drops", "signal": "batteryPct", "value": 12 },
+  { "name": "room matches the target", "signal": "temperature", "value": 21 }
+]

@@ -163,6 +163,7 @@ The firmware build can also call `rippel build` itself (a CMake step or ESP-IDF 
   - GPU draw backend (DMA2D on STM32, PPA on ESP32-P4, VGLite on NXP)
   - flash placement attributes for fonts and images
   - build integration defaults
+- **Targets:** `targets` in `rippel.config.ts` lists other hardware the same UI runs on. `--target <name>` on any command selects one, and `@media` queries see its display. The thermostat builds for the ESP32-S3 with a 480×320 display and the ESP32-C6 with a 170×320 portrait display, from one UI.
 - Display and MCU presets are plain data and functions. Anyone can write their own, and a custom display is just `{ width, height, ... }`.
 
 Rippel generates `lv_conf.h` with only the widgets the UI actually uses enabled, which saves flash.
