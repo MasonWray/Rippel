@@ -4,7 +4,7 @@
  * Supported selectors are a single class with optional LVGL states and one
  * part, e.g. `.card`, `.button:active`, `.slider::knob`, `.slider::knob:active`.
  */
-import postcss, { type ChildNode, type Declaration, type Rule } from "postcss";
+import postcss, { type AtRule, type ChildNode, type Declaration, type Rule } from "postcss";
 import type { StyleContext, StyleRule, StyleSelector, StyleSheet } from "./ir.js";
 import { StyleError, translateDeclarations } from "./translate.js";
 
@@ -67,6 +67,55 @@ function parseSelector(selector: string): { className: string; selector: StyleSe
   return { className: m[1], selector: { part, states } };
 }
 
+function pixels(value: string, ctx: StyleContext): number {
+  const m = /^(\d+\.?\d*|\.\d+)(px|rem)$/.exec(value);
+  if (!m) throw new StyleError(`Expected a length in px or rem, got "${value}"`);
+  return Number(m[1]) * (m[2] === "rem" ? ctx.rem : 1);
+}
+
+function featureMatches(feature: string, value: string | undefined, ctx: StyleContext, display: { width: number; height: number }): boolean {
+  if (value === undefined) throw new StyleError(`Media feature "${feature}" needs a value, like (${feature}: 480px)`);
+  switch (feature) {
+    case "width": return display.width === pixels(value, ctx);
+    case "min-width": return display.width >= pixels(value, ctx);
+    case "max-width": return display.width <= pixels(value, ctx);
+    case "height": return display.height === pixels(value, ctx);
+    case "min-height": return display.height >= pixels(value, ctx);
+    case "max-height": return display.height <= pixels(value, ctx);
+    case "orientation":
+      if (value !== "landscape" && value !== "portrait") throw new StyleError(`Orientation must be landscape or portrait, not "${value}"`);
+      return (display.width >= display.height ? "landscape" : "portrait") === value;
+    default:
+      throw new StyleError(`Unsupported media feature "${feature}". Supported: width, height, min-width, max-width, min-height, max-height, orientation`);
+  }
+}
+
+/**
+ * Decides whether an @media query matches the display being built for.
+ * The display can't change at runtime, so each query is settled at compile time.
+ */
+export function mediaMatches(params: string, ctx: StyleContext): boolean {
+  const display = ctx.display;
+  if (!display) throw new StyleError("@media needs to know the display size");
+  // Evaluates every part, so a typo is an error even in a list that already matched.
+  return params
+    .split(",")
+    .map((query) =>
+      query
+        .trim()
+        .toLowerCase()
+        .split(/\s+and\s+/)
+        .map((term) => {
+          if (term === "screen" || term === "all") return true;
+          const m = /^\(\s*([a-z-]+)\s*(?::\s*([^)]*?)\s*)?\)$/.exec(term);
+          if (!m) throw new StyleError(`Unsupported media query "${term}". Use forms like (min-width: 480px), joined with "and" or commas.`);
+          return featureMatches(m[1], m[2], ctx, display);
+        })
+        .every(Boolean),
+    )
+    .some(Boolean);
+}
+
 function location(node: ChildNode): { line: number; column: number } {
   return { line: node.source?.start?.line ?? 1, column: node.source?.start?.column ?? 1 };
 }
@@ -81,11 +130,25 @@ export function compileStyleSheet(source: string, file: string, ctx: StyleContex
   }
 
   const rules: StyleRule[] = [];
-  for (const node of root.nodes) {
+  const visit = (nodes: ChildNode[]) => {
+  for (const node of nodes) {
     const { line, column } = location(node);
     if (node.type === "comment") continue;
     if (node.type === "atrule") {
-      throw new CssError(`At-rules like "@${node.name}" aren't supported`, file, line, column);
+      const at = node as AtRule;
+      if (at.name.toLowerCase() !== "media") {
+        throw new CssError(`At-rules like "@${at.name}" aren't supported. Only @media is.`, file, line, column);
+      }
+      let matches: boolean;
+      try {
+        matches = mediaMatches(at.params, ctx);
+      } catch (err) {
+        if (err instanceof StyleError) throw new CssError(err.message, file, line, column);
+        throw err;
+      }
+      // Rules stay at their place in the source, so the cascade works as in a browser.
+      if (matches) visit(at.nodes ?? []);
+      continue;
     }
     if (node.type !== "rule") continue;
 
@@ -129,5 +192,7 @@ export function compileStyleSheet(source: string, file: string, ctx: StyleContex
       rules.push({ className: parsed.className, selector: parsed.selector, decls });
     }
   }
+  };
+  visit(root.nodes);
   return { file, rules };
 }

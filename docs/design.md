@@ -69,6 +69,7 @@ A CSS subset that maps directly onto LVGL styles:
 - `transition` maps to LVGL style transitions. They run when a state changes (`:active`, `:checked`, `:disabled`), not when a class changes. LVGL has one duration, delay and easing per transition, and needs the properties listed, so `all` is an error.
 - A `:disabled` rule turns off the grey tint LVGL's theme adds, so the colors you write are the colors you get.
 - `align-items` also places the flex track, so a single line aligns against the whole container as it does in CSS.
+- `@media` queries are settled at compile time against the configured display, since it can't change at runtime. They support `width`, `height`, their `min-` and `max-` forms, and `orientation`, joined with `and` or commas. Only the matching rules reach the device. A block that doesn't match the current display isn't checked until you build for a display it matches.
 - Fonts are chosen by `font-family` and `font-size` together and must exist in the font catalog: built-in Montserrat sizes plus fonts from `rippel.config.ts`.
 - Anything unsupported is a build error with a clear message, never silently ignored.
 

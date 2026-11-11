@@ -132,7 +132,12 @@ export function fontCatalog(config: ResolvedConfig): Record<string, number[]> {
 }
 
 export function styleContext(config: ResolvedConfig): StyleContext {
-  return { fonts: fontCatalog(config), defaultFont: config.defaultFont, rem: config.rem };
+  return {
+    fonts: fontCatalog(config),
+    defaultFont: config.defaultFont,
+    rem: config.rem,
+    display: { width: config.display.width, height: config.display.height },
+  };
 }
 
 export const FONT_URL_PREFIX = "/@rippel/fonts/";
