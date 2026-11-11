@@ -65,3 +65,4 @@ export const Match = SolidMatch as unknown as <T>(props: {
   keyed?: false;
   children: JSX.Element | ((item: Accessor<NonNullable<T>>) => JSX.Element);
 }) => JSX.Element;
+export { createList, type ListFields, type ListItem, type ListOptions, type ListValues, type RippelList } from "./list.js";

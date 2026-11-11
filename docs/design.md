@@ -240,7 +240,7 @@ Notes from bringing it up on the board:
 
 ### M3 and later
 
-**In progress.** The target is the espresso demo on the reference board. Everything except its History screen now builds and runs there, using these additions:
+**In progress.** The target is the espresso demo on the reference board. It now builds and runs there in full, using these additions:
 
 - **Compile-time evaluation.** Anything that doesn't depend on a signal is computed during the build, including constant tables, `.map` and your own helper functions. `<For>` over a constant list expands into one copy per item.
 - **Tables read through a signal.** A value like `RECIPES[recipeIndex()].name` is evaluated once per row and becomes a C lookup table. Class names work the same way.
@@ -248,12 +248,13 @@ Notes from bringing it up on the board:
 - **Inline lengths** like `height` can change at runtime.
 - **Local string signals** hold pointers to string literals.
 - **Branch state:** local signals inside a `<Show>` or `<Switch>` branch reset when it reopens, as they do in the dev runtime.
+- **`createList`** holds records that change at runtime. It takes a fixed `capacity` and field types from the contract, like `{ rating: u8, name: str(16) }`, so storage is reserved at build time and strings have a known size. The device builds one row per slot up front, shows the slots in use, and moves rows when the order changes. Adding to a full list drops the oldest item.
 - `output.lvglHeapKB` sets LVGL's memory. Every branch is built up front, so a UI with several screens needs more than one screen's worth.
 
 Still to come:
 
 
-- `<For>` and `<Index>` over lists that change at runtime, and the memory model for lists and strings
+- Lists pushed from firmware through the contract
 - More widgets, images, animations, multiple screens and navigation
 - Single-binary compiler (decision 10)
 - More integrations (Zephyr, PlatformIO), more MCU and display presets
@@ -264,7 +265,7 @@ Still to come:
 1. **Numeric types (settled for now).** Inferred, as described under M2. Wider integer types for locals may be needed later.
 2. **Signals in C (settled).** Generated setters and bind functions. See M2.
 3. **`<Show>` default.** M2 hides prebuilt objects, which keeps memory predictable. Creating and destroying them could become an option for screens that are rarely open.
-4. **Dynamic lists and strings.** Ownership and allocation of firmware-provided arrays and strings in C.
+4. **Firmware-provided lists.** `createList` settles storage for lists owned by the UI. A firmware-side list needs a way to declare and push it through the contract.
 5. **LVGL version.** Pin one version per Rippel release? Allow user-supplied `lv_conf.h` overrides?
 6. **Reference hardware (settled).** An Adafruit QT Py ESP32-S3 and the Adafruit 3.5" 480×320 TFT.
 7. **Package name.** `rippel` is unclaimed on npm as of 2026-11-07. Reserve it, and decide whether to use one package or a scope (`@rippel/*`).

@@ -204,6 +204,12 @@ function setProperty(node: RNode, name: string, value: unknown): void {
   throw new Error(`Unknown prop "${name}" on <${node.type}>`);
 }
 
+function nextSiblingOf(node: RNode): RNode | undefined {
+  if (!node.parent) return undefined;
+  const siblings = node.parent.children;
+  return siblings[siblings.indexOf(node) + 1];
+}
+
 export const {
   render,
   effect,
@@ -248,6 +254,8 @@ export const {
 
   insertNode(parent, node, anchor) {
     if (parent.kind !== "element") throw new Error("Can't insert into a text node");
+    // Inserting a node before itself means it stays put, as in the DOM.
+    if (anchor === node) anchor = nextSiblingOf(node);
     const previousParent = node.parent;
     if (previousParent) {
       previousParent.children.splice(previousParent.children.indexOf(node), 1);
@@ -290,9 +298,7 @@ export const {
   },
 
   getNextSibling(node) {
-    if (!node.parent) return undefined;
-    const siblings = node.parent.children;
-    return siblings[siblings.indexOf(node) + 1];
+    return nextSiblingOf(node);
   },
 });
 

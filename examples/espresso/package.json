@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "rippel dev",
-    "build": "rippel build --entry src/App.device.tsx",
+    "build": "rippel build",
     "check": "rippel check && tsc --noEmit"
   },
   "dependencies": {

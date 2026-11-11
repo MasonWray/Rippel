@@ -160,9 +160,64 @@ describe("rippel build", () => {
     await expect(build(app(`return <view><For each={[temperature()]}>{() => <view />}</For></view>;`))).rejects.toMatchObject({
       name: "CodegenError",
       line: 5,
-      message: expect.stringMatching(/<For> over a list that changes at runtime.*M3/),
+      message: expect.stringMatching(/<For> needs a constant list, or the items of a list made with createList/),
     });
     await expect(build(app(`const [items] = createSignal([1]); return <label>{items()}</label>;`))).rejects.toBeInstanceOf(CodegenError);
+  });
+
+  describe("createList", () => {
+    const listApp = (body: string) =>
+      app(
+        body,
+        `import { createList } from "rippel"; import { u8, f32, str } from "rippel/contract";
+         const items = createList({ capacity: 3, fields: { score: u8, weight: f32, name: str(8) }, initial: [{ score: 1, weight: 1.5, name: "a" }] });`,
+      );
+
+    it("reserves fixed storage and starts with the initial items", async () => {
+      const { ui } = await build(listApp(`return <view><For each={items.items()}>{(item) => <label>{item.name}</label>}</For></view>;`));
+      expect(ui).toContain("static list_items_item_t list_items[3] = {");
+      expect(ui).toContain('[0] = { .score = 1, .weight = 1.5f, .name = "a", .id = 1, .used = true },');
+      expect(ui).toContain("char name[9];");
+    });
+
+    it("builds one row per slot and shows only those in use", async () => {
+      const { ui } = await build(listApp(`return <view><For each={items.items()}>{(item) => <label>{item.score}</label>}</For></view>;`));
+      expect(ui).toContain("lv_obj_set_hidden(o_label_3, active != 0);");
+      expect(ui).toContain("(unsigned)list_items[2].score");
+    });
+
+    it("sorts with the compare function and moves rows", async () => {
+      const { ui } = await build(listApp(`return <view><For each={items.sorted((a, b) => b.score - a.score)}>{(item) => <label>{item.score}</label>}</For></view>;`));
+      expect(ui).toContain("(list_items[ib].score - list_items[ia].score)");
+      expect(ui).toContain("lv_obj_move_to_index(view_");
+      // Changing any item's score re-sorts.
+      expect(ui).toMatch(/static void set_items_2_score\(uint8_t value\)[^}]*bind_\d+_view\(\);/);
+    });
+
+    it("compiles add, remove and update in handlers", async () => {
+      const { ui } = await build(
+        listApp(`return <view>
+          <button onClick={() => items.add({ score: 2, weight: level(), name: "b" })}>Add</button>
+          <For each={items.items()}>{(item) => <button onClick={() => items.update(item, { score: 9 })} onLongPress={() => items.remove(item)}>{item.score}</button>}</For>
+        </view>;`),
+      );
+      expect(ui).toContain('items_add((uint8_t)2, (float)sig_level, "b");');
+      expect(ui).toContain("set_items_0_score((uint8_t)9);");
+      expect(ui).toContain("set_items_1_used(false);");
+      expect(ui).toContain("/* Full: the oldest item makes room. */");
+    });
+
+    it("computes size and sum", async () => {
+      const { ui } = await build(listApp(`return <label>{items.size()} {items.sum((i) => i.weight).toFixed(1)}</label>;`));
+      expect(ui).toContain("sig_items_size");
+      expect(ui).toMatch(/if\(list_items\[i\]\.used\) total \+= list_items\[i\]\.weight;/);
+    });
+
+    it("rejects more initial items than the capacity", async () => {
+      await expect(
+        build(app(`return <For each={l.items()}>{() => <view />}</For>;`, `import { createList } from "rippel"; import { u8 } from "rippel/contract"; const l = createList({ capacity: 1, fields: { a: u8 }, initial: [{ a: 1 }, { a: 2 }] });`)),
+      ).rejects.toThrow(/don't fit a capacity/);
+    });
   });
 
   it("expands <For> over constant data", async () => {

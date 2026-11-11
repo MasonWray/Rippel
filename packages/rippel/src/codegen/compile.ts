@@ -39,7 +39,9 @@ export interface ValueInfo {
 
 export interface Signal {
   name: string;
-  kind: "firmware" | "local";
+  kind: "firmware" | "local" | "list";
+  /** C expression for the value, when it isn't a variable of its own. */
+  code?: string;
   value: ValueInfo;
   /** C initializer. */
   initial: string;
@@ -66,6 +68,9 @@ export interface Handler {
   /** The widget's current value is read into `value`. */
   valueGetter?: string;
 }
+
+/** The C expression that reads a signal. */
+export const sigRef = (signal: Signal) => signal.code ?? `sig_${signal.name}`;
 
 export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar";
 
@@ -98,6 +103,10 @@ export interface UiProgram {
   usedFonts: Set<string>;
   warnings: string[];
   tables: { key: string; name: string; ctype: string; values: string[] }[];
+  lists: { storage: string; capacity: number; fields: string[]; rows: string[]; nextId: number }[];
+  /** Generated helpers, callable from bindings and handlers. */
+  functions: { signature: string; body: string[] }[];
+  declarations: string[];
 }
 
 /** C for adding or removing the styles of a set of classes, in cascade order. */
@@ -145,6 +154,9 @@ type Binding =
   | { k: "const"; value: ConstValue }
   | { k: "getter"; value: ConstValue }
   | { k: "unsupported"; message: string }
+  | { k: "list"; list: ListInfo }
+  | { k: "listItem"; list: ListInfo; slot: number }
+  | { k: "listItemAt"; list: ListInfo; index: string; reads: Set<string> }
   | { k: "children"; nodes: JsxChild[]; scope: Scope; module: Module }
   | { k: "value"; expr: Expr }
   | { k: "props"; props: Map<string, Binding>; children?: Binding }
@@ -164,6 +176,28 @@ class NotConstant extends Error {
   constructor(public readonly split?: { signal: Signal; size: number }) {
     super("not constant");
   }
+}
+
+interface ListSlot {
+  fields: Map<string, Signal>;
+  id: Signal;
+  used: Signal;
+}
+
+interface ListInfo {
+  name: string;
+  storage: string;
+  capacity: number;
+  fields: Map<string, { c: string; value: ValueInfo }>;
+  slots: ListSlot[];
+  size: Signal;
+}
+
+interface ListView {
+  list: ListInfo;
+  compare?: FuncNode;
+  scope: Scope;
+  module: Module;
 }
 
 type Folded = { k: "const"; value: ConstValue } | { k: "split"; signal: Signal; values: ConstValue[] };
@@ -303,7 +337,7 @@ function isParenthesized(code: string): boolean {
 }
 
 function wrap(code: string): string {
-  return /^[\w.]+$/.test(code) || isParenthesized(code) ? code : `(${code})`;
+  return /^[\w.[\]]+$/.test(code) || isParenthesized(code) ? code : `(${code})`;
 }
 
 /** Statements that format `node` into the char buffer `text`, using `n` as the write position. */
@@ -416,6 +450,9 @@ class Compiler {
     usedFonts: new Set(),
     warnings: [],
     tables: [],
+    lists: [],
+    functions: [],
+    declarations: [],
   };
   private readonly modules = new Map<string, Module>();
   private readonly contract = new Map<string, Binding>();
@@ -477,14 +514,7 @@ class Compiler {
 
   private loadContract(file: string) {
     const module: Module = { file, scope: newScope(), exports: new Map() };
-    const typeOf = (node: t.Node): ValueInfo => {
-      if (node.type === "Identifier" && CONTRACT_TYPES[node.name]) return CONTRACT_TYPES[node.name];
-      if (node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "str") {
-        const size = node.arguments[0];
-        if (size?.type === "NumericLiteral") return { base: "string", ctype: "char", maxLength: size.value };
-      }
-      this.fail(node, module, "Expected a contract type like u8, f32, bool or str(32)");
-    };
+    const typeOf = (node: t.Node): ValueInfo => this.contractType(node, module);
 
     for (const statement of this.parse(file).program.body) {
       if (statement.type === "ImportDeclaration") continue;
@@ -698,6 +728,10 @@ class Compiler {
         add(name, { k: "func", node: init, scope, module });
       } else if (init.type === "CallExpression" && init.callee.type === "Identifier" && lookup(scope, init.callee.name)?.k === "rippel") {
         const helper = lookup(scope, init.callee.name) as { name: string };
+        if (helper.name === "createList") {
+          add(name, { k: "lazy", node: init as t.Expression, scope, module, name });
+          continue;
+        }
         const arg = init.arguments[0] && unwrap(init.arguments[0]);
         if (helper.name !== "createMemo" || !arg || !isFunc(arg)) this.fail(init, module, `${helper.name}() ${LATER} here`);
         add(name, { k: "func", node: arg, scope, module });
@@ -750,6 +784,26 @@ class Compiler {
     }
     if (n.type === "MemberExpression" && !n.computed && n.property.type === "Identifier") {
       const object = this.resolveBinding(n.object, scope, module);
+      if (object?.binding.k === "listItem") {
+        const { list, slot } = object.binding;
+        const name = n.property.name;
+        const signal = name === "id" ? list.slots[slot].id : list.slots[slot].fields.get(name);
+        if (!signal) this.fail(n, module, `${list.name} items have no field "${name}"`);
+        return { binding: { k: "signal", signal }, module };
+      }
+      if (object?.binding.k === "listItemAt") {
+        const { list, index, reads } = object.binding;
+        const name = n.property.name;
+        const info = name === "id" ? { c: "id", value: { base: "int", ctype: "int32_t" } as ValueInfo } : list.fields.get(name);
+        if (!info) this.fail(n, module, `${list.name} items have no field "${name}"`);
+        reads.add(name);
+        const code = `${list.storage}[${index}].${info.c}`;
+        const expr: Expr =
+          info.value.base === "string"
+            ? strExpr({ k: "ptr", code, max: info.value.maxLength ?? 0 }, noDeps())
+            : { type: info.value.base, code, deps: noDeps(), unsigned: info.value.unsigned };
+        return { binding: { k: "value", expr }, module };
+      }
       if (object?.binding.k === "props") {
         if (n.property.name === "children") return object.binding.children ? { binding: object.binding.children, module } : undefined;
         const binding = object.binding.props.get(n.property.name);
@@ -865,6 +919,7 @@ class Compiler {
         const resolved = this.resolveBinding(n, scope, module);
         if (resolved?.binding.k === "lazy") return this.expr(resolved.binding.node, resolved.binding.scope, resolved.binding.module);
         if (resolved?.binding.k === "value") return resolved.binding.expr;
+        if (resolved?.binding.k === "signal") return this.readSignal(resolved.binding.signal);
         if (n.object.type === "Identifier" && n.object.name === "Math" && n.property.type === "Identifier" && n.property.name === "PI") {
           return { type: "float", code: "3.14159265f", deps: noDeps() };
         }
@@ -972,6 +1027,8 @@ class Compiler {
     if (callee.type === "MemberExpression" && !callee.computed && callee.property.type === "Identifier") {
       const method = callee.property.name;
       if (callee.object.type === "Identifier" && callee.object.name === "Math") return this.mathCall(method, n, scope, module);
+      const list = this.listOf(callee.object, scope, module);
+      if (list) return this.listExpr(list, method, n, scope, module);
       if (method === "toFixed") {
         const value = this.expr(callee.object, scope, module);
         const digits = n.arguments[0] ?? { type: "NumericLiteral", value: 0 };
@@ -991,12 +1048,7 @@ class Compiler {
 
     const resolved = this.resolveBinding(callee, scope, module);
     if (resolved?.binding.k === "signal") {
-      const { signal } = resolved.binding;
-      this.collect?.add(signal);
-      const deps = new Set([signal]);
-      const code = `sig_${signal.name}`;
-      if (signal.value.base === "string") return strExpr({ k: "ptr", code, max: signal.value.maxLength ?? 0 }, deps);
-      return { type: signal.value.base, code, deps, unsigned: signal.value.unsigned };
+      return this.readSignal(resolved.binding.signal);
     }
     if (resolved?.binding.k === "func") {
       const { node: func, scope: funcScope, module: funcModule } = resolved.binding;
@@ -1105,6 +1157,10 @@ class Compiler {
   /** The signal this expression reads, if reading one is all it does. */
   private directSignal(node: t.Node, scope: Scope, module: Module): Signal | undefined {
     const n = unwrap(node);
+    if (n.type === "MemberExpression") {
+      const resolved = this.resolveBinding(n, scope, module);
+      return resolved?.binding.k === "signal" ? resolved.binding.signal : undefined;
+    }
     if (n.type !== "CallExpression" || n.arguments.length) return undefined;
     const callee = unwrap(n.callee);
     if (callee.type !== "Identifier") return undefined;
@@ -1241,6 +1297,7 @@ class Compiler {
         throw new NotConstant();
       }
       if (b.k === "rippel") {
+        if (b.name === "createList") return new Opaque({ k: "list", list: this.createList(this.signalHint ?? "list", n, scope, module) });
         if (b.name === "createSignal") {
           const signal = this.createLocalSignal(this.signalHint ?? "signal", n, scope, module);
           return [new Opaque({ k: "signal", signal }), new Opaque({ k: "setter", signal })];
@@ -1361,7 +1418,7 @@ class Compiler {
     const { signal, values } = folded;
     this.collect?.add(signal);
     const deps = new Set([signal]);
-    const index = `sig_${signal.name}`;
+    const index = sigRef(signal);
     const table = (ctype: string, items: string[]) => {
       const key = `${ctype}:${items.join(",")}`;
       let found = this.program.tables.find((x) => x.key === key);
@@ -1385,6 +1442,391 @@ class Compiler {
       return { type: "float", code: table("float", numbers.map(floatLiteral)), deps };
     }
     this.fail(node, module, "Only numbers, strings and booleans can be read from a table by a signal");
+  }
+
+  // ---------- Runtime lists ----------
+
+  /** The list an expression refers to, if any. */
+  private listOf(node: t.Node, scope: Scope, module: Module): ListInfo | undefined {
+    const value = this.tryConst(node, scope, module);
+    return value?.value instanceof Opaque && value.value.binding.k === "list" ? value.value.binding.list : undefined;
+  }
+
+  private contractType(node: t.Node, module: Module): ValueInfo {
+    const n = unwrap(node);
+    if (n.type === "Identifier" && CONTRACT_TYPES[n.name]) return CONTRACT_TYPES[n.name];
+    if (n.type === "CallExpression" && n.callee.type === "Identifier" && n.callee.name === "str") {
+      const size = n.arguments[0];
+      if (size?.type === "NumericLiteral") return { base: "string", ctype: "char", maxLength: size.value };
+    }
+    this.fail(n, module, "Expected a contract type like u8, f32, bool or str(32)");
+  }
+
+  private fieldLiteral(value: ValueInfo, v: ConstValue): string {
+    switch (value.base) {
+      case "bool": return v ? "true" : "false";
+      case "string": return cString(String(v ?? ""));
+      case "float": return floatLiteral(Number(v ?? 0));
+      default: return String(Math.trunc(Number(v ?? 0)));
+    }
+  }
+
+  /** Reserves storage for a list, with one set of signals per slot, and generates its `add`. */
+  private createList(hint: string, n: t.CallExpression, scope: Scope, module: Module): ListInfo {
+    const options = n.arguments[0] && unwrap(n.arguments[0]);
+    if (options?.type !== "ObjectExpression") this.fail(n, module, "createList takes `{ capacity, fields, initial }`");
+    const option = (key: string) => {
+      for (const p of options.properties) {
+        if (p.type === "ObjectProperty" && p.key.type === "Identifier" && p.key.name === key) return p.value;
+      }
+      return undefined;
+    };
+
+    const capacityNode = option("capacity");
+    const capacity = capacityNode && this.tryConst(capacityNode, scope, module)?.value;
+    if (typeof capacity !== "number" || !Number.isInteger(capacity) || capacity < 1) this.fail(n, module, "createList needs a constant whole-number `capacity`");
+
+    let fieldsNode = option("fields") && unwrap(option("fields") as t.Node);
+    if (fieldsNode?.type === "Identifier") {
+      const b = lookup(scope, fieldsNode.name);
+      if (b?.k === "lazy") fieldsNode = unwrap(b.node);
+    }
+    if (fieldsNode?.type !== "ObjectExpression") this.fail(n, module, "createList needs `fields`, an object of contract types like `{ rating: u8 }`");
+
+    const fields = new Map<string, { c: string; value: ValueInfo }>();
+    for (const p of fieldsNode.properties) {
+      if (p.type !== "ObjectProperty" || p.key.type !== "Identifier") this.fail(p, module, "Expected `name: type`");
+      if (p.key.name === "id" || p.key.name === "used") this.fail(p, module, `"${p.key.name}" is reserved in a list item`);
+      fields.set(p.key.name, { c: snake(p.key.name), value: this.contractType(p.value, module) });
+    }
+
+    const initialNode = option("initial");
+    const known = initialNode ? this.tryConst(initialNode, scope, module) : { value: [] as ConstValue[] };
+    if (!known || !Array.isArray(known.value)) this.fail(initialNode ?? n, module, "`initial` must be a constant list");
+    const initial = known.value as Record<string, ConstValue>[];
+    if (initial.length > capacity) this.fail(initialNode ?? n, module, `${initial.length} initial items don't fit a capacity of ${capacity}`);
+
+    const name = this.unique(snake(hint));
+    const storage = `list_${name}`;
+    const makeSignal = (slot: number, field: string, c: string, value: ValueInfo, literal: string): Signal => {
+      const signal: Signal = { name: `${name}_${slot}_${c}`, kind: "list", value, initial: literal, binds: [], code: `${storage}[${slot}].${c}` };
+      this.program.signals.push(signal);
+      void field;
+      return signal;
+    };
+
+    const INT: ValueInfo = { base: "int", ctype: "int32_t" };
+    const BOOL: ValueInfo = { base: "bool", ctype: "bool" };
+    const slots: ListSlot[] = [];
+    const rows: string[] = [];
+    for (let slot = 0; slot < capacity; slot++) {
+      const item = initial[slot];
+      const signals = new Map<string, Signal>();
+      const parts: string[] = [];
+      for (const [field, info] of fields) {
+        const literal = this.fieldLiteral(info.value, item?.[field]);
+        signals.set(field, makeSignal(slot, field, info.c, info.value, literal));
+        parts.push(`.${info.c} = ${literal}`);
+      }
+      const id = makeSignal(slot, "id", "id", INT, String(item ? slot + 1 : 0));
+      const used = makeSignal(slot, "used", "used", BOOL, item ? "true" : "false");
+      slots.push({ fields: signals, id, used });
+      if (item) rows.push(`[${slot}] = { ${parts.join(", ")}, .id = ${slot + 1}, .used = true }`);
+    }
+
+    const size: Signal = { name: this.unique(`${name}_size`), kind: "local", value: INT, initial: String(initial.length), binds: [] };
+    this.program.signals.push(size);
+
+    const declare = (info: { c: string; value: ValueInfo }) =>
+      info.value.base === "string" ? `char ${info.c}[${(info.value.maxLength ?? 0) + 1}];` : `${info.value.ctype} ${info.c};`;
+    this.program.lists.push({ storage, capacity, fields: [...[...fields.values()].map(declare), "int32_t id;", "bool used;"], rows, nextId: initial.length + 1 });
+
+    const list: ListInfo = { name, storage, capacity, fields, slots, size };
+    this.emitListHelpers(list);
+    return list;
+  }
+
+  private emitListHelpers(list: ListInfo) {
+    const { name, storage, capacity, fields, slots, size } = list;
+    const paramType = (v: ValueInfo) => (v.base === "string" ? "const char *" : v.ctype);
+    const params = [...fields.values()].map((f) => `${paramType(f.value)} ${f.c}`).join(", ") || "void";
+
+    this.program.functions.push({
+      signature: `static void ${name}_refresh_size(void)`,
+      body: [
+        "int32_t count = 0;",
+        `for(int32_t i = 0; i < ${capacity}; i++) {`,
+        `if(${storage}[i].used) count++;`,
+        "}",
+        `set_${size.name}(count);`,
+      ],
+    });
+
+    const cases: string[] = [];
+    slots.forEach((slot, i) => {
+      cases.push(`case ${i}:`);
+      for (const [field, info] of fields) cases.push(`set_${slot.fields.get(field)!.name}(${info.c});`);
+      cases.push(`set_${slot.id.name}(id);`, `set_${slot.used.name}(true);`, "break;");
+    });
+    this.program.functions.push({
+      signature: `static void ${name}_add(${params})`,
+      body: [
+        `static int32_t next_id = ${this.program.lists[this.program.lists.length - 1].nextId};`,
+        "int32_t slot = -1;",
+        `for(int32_t i = 0; i < ${capacity} && slot < 0; i++) {`,
+        `if(!${storage}[i].used) slot = i;`,
+        "}",
+        "if(slot < 0) {",
+        "/* Full: the oldest item makes room. */",
+        "slot = 0;",
+        `for(int32_t i = 1; i < ${capacity}; i++) {`,
+        `if(${storage}[i].id < ${storage}[slot].id) slot = i;`,
+        "}",
+        "}",
+        "const int32_t id = next_id++;",
+        "switch(slot) {",
+        ...cases,
+        "default:",
+        "break;",
+        "}",
+        `${name}_refresh_size();`,
+      ],
+    });
+  }
+
+  private itemSlot(node: t.Node, scope: Scope, module: Module): number {
+    const resolved = this.resolveBinding(node, scope, module);
+    if (resolved?.binding.k !== "listItem") this.fail(node, module, "Expected an item of this list");
+    return resolved.binding.slot;
+  }
+
+  /** `list.add`, `list.remove` and `list.update` in a handler. Returns false if this isn't one. */
+  private listEffect(n: t.CallExpression, scope: Scope, module: Module, indent: string, out: string[]): boolean {
+    const callee = unwrap(n.callee);
+    if (callee.type !== "MemberExpression" || callee.computed || callee.property.type !== "Identifier") return false;
+    const list = this.listOf(callee.object, scope, module);
+    if (!list) return false;
+    const method = callee.property.name;
+
+    const numberOrString = (node: t.Node, value: ValueInfo): string => {
+      const e = this.expr(node, scope, module);
+      if (value.base === "string") {
+        if (!e.code) this.fail(node, module, "List strings must be plain strings on the device");
+        return e.code;
+      }
+      if (value.base === "bool") return this.truthy(e, node, module);
+      return `(${value.ctype})${wrap(e.code)}`;
+    };
+    const objectArg = (node: t.Node | undefined): Map<string, t.Node> => {
+      const shape = node && unwrap(node);
+      if (shape?.type !== "ObjectExpression") this.fail(n, module, `list.${method} needs an object of field values`);
+      const given = new Map<string, t.Node>();
+      for (const p of shape.properties) {
+        if (p.type !== "ObjectProperty" || p.key.type !== "Identifier") this.fail(p, module, `This kind of property ${LATER}`);
+        given.set(p.key.name, p.value);
+      }
+      return given;
+    };
+
+    switch (method) {
+      case "add": {
+        const given = objectArg(n.arguments[0]);
+        const args = [...list.fields].map(([field, info]) => {
+          const node = given.get(field);
+          if (!node) this.fail(n, module, `Missing field "${field}" for ${list.name}.add`);
+          return numberOrString(node, info.value);
+        });
+        out.push(`${indent}${list.name}_add(${args.join(", ")});`);
+        return true;
+      }
+      case "remove": {
+        const slot = this.itemSlot(n.arguments[0], scope, module);
+        out.push(`${indent}set_${list.slots[slot].used.name}(false);`, `${indent}${list.name}_refresh_size();`);
+        return true;
+      }
+      case "update": {
+        const slot = this.itemSlot(n.arguments[0], scope, module);
+        for (const [field, node] of objectArg(n.arguments[1])) {
+          const info = list.fields.get(field);
+          if (!info) this.fail(node, module, `${list.name} has no field "${field}"`);
+          out.push(`${indent}set_${list.slots[slot].fields.get(field)!.name}(${numberOrString(node, info.value)});`);
+        }
+        return true;
+      }
+      default:
+        this.fail(n, module, `list.${method}() can't be called from a handler`);
+    }
+  }
+
+  /** Signals a computation over the whole list depends on. */
+  private listDeps(list: ListInfo, reads: Set<string>, collected: Set<Signal>): Set<Signal> {
+    const deps = new Set<Signal>(collected);
+    for (const slot of list.slots) {
+      deps.add(slot.used);
+      deps.add(slot.id);
+      for (const field of reads) {
+        const signal = slot.fields.get(field);
+        if (signal) deps.add(signal);
+      }
+    }
+    return deps;
+  }
+
+  /** Compiles a callback that reads list items by index, tracking what it reads. */
+  private listCallback(
+    func: FuncNode,
+    list: ListInfo,
+    indexes: string[],
+    scope: Scope,
+    module: Module,
+  ): { e: Expr; reads: Set<string>; collected: Set<Signal> } {
+    const reads = new Set<string>();
+    const collected = new Set<Signal>();
+    const previous = this.collect;
+    this.collect = collected;
+    const inner = this.bindParams(func, indexes.map((index) => ({ k: "listItemAt", list, index, reads })), scope, module);
+    const { value, statements } = this.returned(func, module);
+    for (const statement of statements) this.declare(statement, inner, module);
+    const e = this.expr(value, inner, module);
+    this.collect = previous;
+    return { e, reads, collected };
+  }
+
+  /** `list.size()` and `list.sum(fn)` in an expression. */
+  private listExpr(list: ListInfo, method: string, n: t.CallExpression, scope: Scope, module: Module): Expr {
+    if (method === "size") return this.readSignal(list.size);
+    if (method !== "sum") this.fail(n, module, `list.${method}() can't be used as a value here`);
+
+    const arg = n.arguments[0] && unwrap(n.arguments[0]);
+    if (!arg || !isFunc(arg)) this.fail(n, module, "list.sum needs a function");
+    const { e, reads, collected } = this.listCallback(arg, list, ["i"], scope, module);
+    if (e.type === "string" || e.type === "bool") this.fail(arg, module, "list.sum needs a function that returns a number");
+
+    const name = `sum_${this.program.functions.length}`;
+    this.program.functions.push({
+      signature: `static float ${name}(void)`,
+      body: [
+        "float total = 0;",
+        `for(int32_t i = 0; i < ${list.capacity}; i++) {`,
+        `if(${list.storage}[i].used) total += ${e.code};`,
+        "}",
+        "return total;",
+      ],
+    });
+    const deps = this.listDeps(list, reads, collected);
+    for (const d of deps) this.collect?.add(d);
+    return { type: "float", code: `${name}()`, deps };
+  }
+
+  /** Works out which list and order a <For each={...}> shows. */
+  private listView(node: t.Node, scope: Scope, module: Module): ListView | undefined {
+    const n = unwrap(node);
+    if (n.type !== "CallExpression") return undefined;
+    const callee = unwrap(n.callee);
+    if (callee.type === "MemberExpression" && !callee.computed && callee.property.type === "Identifier") {
+      const list = this.listOf(callee.object, scope, module);
+      if (list) {
+        if (callee.property.name === "items") return { list, scope, module };
+        if (callee.property.name !== "sorted") return undefined;
+        const arg = n.arguments[0] && unwrap(n.arguments[0]);
+        if (!arg || !isFunc(arg)) this.fail(n, module, "list.sorted needs a function");
+        return { list, compare: arg, scope, module };
+      }
+    }
+    const resolved = this.resolveBinding(callee, scope, module);
+    if (resolved?.binding.k !== "func") return undefined;
+    const { node: func, scope: funcScope, module: funcModule } = resolved.binding;
+    const inner = this.bindParams(func, n.arguments.map((a) => ({ k: "lazy", node: a as t.Expression, scope, module })), funcScope, funcModule);
+    const { value, statements } = this.returned(func, funcModule);
+    for (const statement of statements) this.declare(statement, inner, funcModule);
+    return this.listView(value, inner, funcModule);
+  }
+
+  /** One prebuilt row per slot, shown while the slot is in use and moved to keep the list in order. */
+  private runtimeFor(view: ListView, func: Extract<Binding, { k: "func" }>, el: t.JSXElement, place: Place, module: Module) {
+    const { list } = view;
+    if (func.node.params.length > 1) this.fail(el, module, `The index argument ${LATER} on a list that changes at runtime`);
+
+    const rows: Obj[] = [];
+    list.slots.forEach((slot, i) => {
+      const roots: Obj[] = [];
+      this.branches(
+        [
+          {
+            test: this.readSignal(slot.used),
+            body: (p) => {
+              this.instance++;
+              const inner = this.bindParams(func.node, [{ k: "listItem", list, slot: i }], func.scope, func.module);
+              const { value, statements } = this.returned(func.node, func.module);
+              for (const statement of statements) this.declare(statement, inner, func.module, p);
+              this.child(value, inner, func.module, p);
+            },
+          },
+        ],
+        { ...place, roots },
+        el,
+        module,
+      );
+      if (roots.length !== 1) this.fail(el, module, "Each row of a list that changes at runtime must be a single element");
+      rows.push(roots[0]);
+    });
+    place.roots?.push(...rows);
+
+    const id = this.program.functions.length;
+    const compareName = `compare_${id}`;
+    let reads = new Set<string>();
+    let collected = new Set<Signal>();
+    let compareBody = ["LV_UNUSED(ia);", "LV_UNUSED(ib);", "return 0;"];
+    if (view.compare) {
+      const compiled = this.listCallback(view.compare, list, ["ia", "ib"], view.scope, view.module);
+      if (compiled.e.type === "string" || compiled.e.type === "bool") this.fail(view.compare, view.module, "A sort function must return a number");
+      ({ reads, collected } = compiled);
+      compareBody = [`const ${compiled.e.type === "float" ? "float" : "int32_t"} order = ${compiled.e.code};`, "return order < 0 ? -1 : order > 0 ? 1 : 0;"];
+    }
+    this.program.functions.push({ signature: `static int32_t ${compareName}(int32_t ia, int32_t ib)`, body: compareBody });
+
+    const rowsName = `view_${id}_rows`;
+    const baseName = `view_${id}_base`;
+    this.program.declarations.push(`static lv_obj_t * ${rowsName}[${list.capacity}];`, `static int32_t ${baseName};`);
+    rows.forEach((row, i) => this.line(`${rowsName}[${i}] = ${row.name};`));
+    this.line(`${baseName} = lv_obj_get_index(${rowsName}[0]);`);
+
+    const { storage, capacity } = list;
+    this.bind("view", this.listDeps(list, reads, collected), undefined, [
+      `int32_t order[${capacity}];`,
+      "int32_t count = 0;",
+      `for(int32_t i = 0; i < ${capacity}; i++) {`,
+      `if(${storage}[i].used) order[count++] = i;`,
+      "}",
+      "/* A stable insertion sort: equal items stay oldest first, as in JS. */",
+      "for(int32_t i = 1; i < count; i++) {",
+      "const int32_t item = order[i];",
+      "int32_t j = i - 1;",
+      "while(j >= 0) {",
+      `const int32_t c = ${compareName}(order[j], item);`,
+      `if(c < 0 || (c == 0 && ${storage}[order[j]].id < ${storage}[item].id)) break;`,
+      "order[j + 1] = order[j];",
+      "j--;",
+      "}",
+      "order[j + 1] = item;",
+      "}",
+      `static int32_t shown[${capacity}];`,
+      "static int32_t shown_count = -1;",
+      "if(count == shown_count && memcmp(order, shown, sizeof(int32_t) * (size_t)count) == 0) return;",
+      "shown_count = count;",
+      `memcpy(shown, order, sizeof(order));`,
+      "for(int32_t k = 0; k < count; k++) {",
+      `lv_obj_move_to_index(${rowsName}[order[k]], ${baseName} + k);`,
+      "}",
+    ]);
+  }
+
+  private readSignal(signal: Signal): Expr {
+    this.collect?.add(signal);
+    const deps = new Set([signal]);
+    const code = sigRef(signal);
+    if (signal.value.base === "string") return strExpr({ k: "ptr", code, max: signal.value.maxLength ?? 0 }, deps);
+    return { type: signal.value.base, code, deps, unsigned: signal.value.unsigned };
   }
 
   private statements(list: t.Statement[], scope: Scope, module: Module, indent: string, out: string[]) {
@@ -1483,6 +1925,7 @@ class Compiler {
       return;
     }
     if (n.type !== "CallExpression") this.fail(n, module, "Handlers can only call functions, set signals and call actions");
+    if (this.listEffect(n, scope, module, indent, out)) return;
 
     const dynamic = this.runtimeIndex(n.callee, scope, module);
     if (dynamic) {
@@ -1876,13 +2319,17 @@ class Compiler {
     if (name === "For" || name === "Index") {
       const each = attr("each");
       const items = each && this.tryConst(each, scope, module);
-      if (!items || !Array.isArray(items.value)) {
-        this.fail(el, module, `<${name}> over a list that changes at runtime ${LATER}. It's planned for M3.`);
-      }
       const content = el.children.find((c) => c.type === "JSXExpressionContainer" && c.expression.type !== "JSXEmptyExpression") as t.JSXExpressionContainer | undefined;
       const fn = content && unwrap(content.expression);
       const func: Binding | undefined = fn && (isFunc(fn) ? { k: "func", node: fn, scope, module } : this.resolveBinding(fn, scope, module)?.binding);
       if (func?.k !== "func") this.fail(el, module, `<${name}> needs a function as its child`);
+
+      if (!items || !Array.isArray(items.value)) {
+        const view = name === "For" && each ? this.listView(each, scope, module) : undefined;
+        if (!view) this.fail(el, module, `<${name}> needs a constant list, or the items of a list made with createList.`);
+        this.runtimeFor(view, func, el, place, module);
+        return;
+      }
 
       items.value.forEach((item, i) => {
         this.instance++;
@@ -2129,7 +2576,7 @@ class Compiler {
     if (folded?.k === "const" && typeof folded.value === "string") return [{ conds: [], text: folded.value }];
     if (folded?.k === "split" && folded.values.every((v) => typeof v === "string")) {
       const deps = new Set([folded.signal]);
-      return folded.values.map((text, i) => ({ conds: [boolExpr(`(sig_${folded.signal.name} == ${i})`, deps)], text: text as string }));
+      return folded.values.map((text, i) => ({ conds: [boolExpr(`(${sigRef(folded.signal)} == ${i})`, deps)], text: text as string }));
     }
     switch (n.type) {
       case "StringLiteral":

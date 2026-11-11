@@ -4,9 +4,9 @@ import { Rating } from "../components/Rating";
 import { Stat } from "../components/Stat";
 import { elapsedDs, weightG } from "../firmware.contract";
 import { icons } from "../icons";
-import { accent, discardFinishedShot, doseTenths, peakPressure, recipe } from "../state";
+import { accent, discardFinishedShot, doseTenths, peakPressure, recipe, saveFinishedShot } from "../state";
 
-export function Summary(props: { onSave: (rating: number) => void }) {
+export function Summary() {
   const [rating, setRating] = createSignal(0);
   const ratio = () => (weightG() / (doseTenths() / 10)).toFixed(1);
 
@@ -35,7 +35,7 @@ export function Summary(props: { onSave: (rating: number) => void }) {
           <button class="secondary" onClick={discardFinishedShot}>
             {icons.close}  Discard
           </button>
-          <button class={`primary fill-${accent()}`} disabled={rating() === 0} onClick={() => props.onSave(rating())}>
+          <button class={`primary fill-${accent()}`} disabled={rating() === 0} onClick={() => saveFinishedShot(rating())}>
             {icons.check}  Save shot
           </button>
         </view>

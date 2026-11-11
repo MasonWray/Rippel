@@ -36,7 +36,7 @@ Wait for the boiler to heat up, pick a recipe and press **Start shot**. Things t
 - In History, sort by **Top rated** and change a rating. The rows reorder as you tap.
 - In the signals panel, drag `waterPct` below 15 to see the machine refuse to brew.
 
-`examples/espresso/firmware` runs the same UI on an ESP32-S3 and a 480×320 display, except for History, which needs lists that change at runtime. Build it with `npm run build -w espresso-example`, then `idf.py build flash monitor` in that folder.
+`examples/espresso/firmware` runs the same UI on an ESP32-S3 and a 480×320 display. Build it with `npm run build -w espresso-example`, then `idf.py build flash monitor` in that folder.
 
 ## What a Rippel project looks like
 
