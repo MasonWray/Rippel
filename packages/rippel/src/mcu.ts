@@ -25,6 +25,11 @@ export function esp32(options: { psramKB?: number } = {}): McuConfig {
   return { name: "ESP32", fpu: "single", ramKB: 520, psramKB: options.psramKB };
 }
 
+/** ESP32-C6: a single RISC-V core at 160 MHz, with no FPU. */
+export function esp32c6(): McuConfig {
+  return { name: "ESP32-C6", fpu: "none", ramKB: 512 };
+}
+
 export function esp32p4(options: { psramKB?: number } = {}): McuConfig {
   return { name: "ESP32-P4", fpu: "single", ramKB: 768, psramKB: options.psramKB, gpu: "ppa" };
 }

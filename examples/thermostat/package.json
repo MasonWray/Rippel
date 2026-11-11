@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "rippel dev",
     "build": "rippel build",
+    "dev:c6": "rippel dev --target c6",
+    "build:c6": "rippel build --target c6",
     "check": "rippel check && tsc --noEmit"
   },
   "dependencies": {

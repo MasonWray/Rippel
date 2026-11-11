@@ -99,3 +99,23 @@
   background: #2a3140;
   color: #6c7585;
 }
+
+/* Narrow portrait screens, like the 1.9" 170x320 LCD: stack the rows. */
+@media (max-width: 240px) {
+  .screen {
+    padding: 14px 12px;
+    gap: 10px;
+  }
+
+  .top-bar,
+  .reading,
+  .target-row {
+    flex-direction: column;
+    align-items: start;
+    gap: 6px;
+  }
+
+  .apply {
+    width: 100%;
+  }
+}

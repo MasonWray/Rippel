@@ -1,6 +1,6 @@
 import { defineConfig } from "rippel";
-import { adafruit_3_5_tft } from "rippel/displays";
-import { esp32s3 } from "rippel/mcu";
+import { adafruit_3_5_tft, waveshare_1_9_lcd } from "rippel/displays";
+import { esp32c6, esp32s3 } from "rippel/mcu";
 
 export default defineConfig({
   entry: "src/App.tsx",
@@ -10,6 +10,14 @@ export default defineConfig({
   output: {
     dir: "firmware/components/ui",
     integration: "esp-idf",
+  },
+  // The same UI on other hardware: `rippel dev --target c6`, `rippel build --target c6`.
+  targets: {
+    c6: {
+      display: waveshare_1_9_lcd(),
+      mcu: esp32c6(),
+      output: { dir: "firmware-c6/components/ui", integration: "esp-idf" },
+    },
   },
   fonts: {
     // Lato ships with LVGL's examples (SIL Open Font License).

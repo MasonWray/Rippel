@@ -27,11 +27,15 @@ Options:
   --host       Listen on all network interfaces
   --out <dir>  Where build writes (default: output.dir in rippel.config.ts)
   --entry <f>  Build this root component instead of the configured entry
+  --target <t> Use a target from \`targets\` in rippel.config.ts
   -h, --help   Show this help
 `;
 
+/** The target selected with --target, if any. */
+let target: string | undefined;
+
 async function dev(root: string, port: number | undefined, host: boolean) {
-  const config = await loadConfig(root);
+  const config = await loadConfig(root, target);
   const server = await createServer({
     root,
     configFile: false,
@@ -57,7 +61,7 @@ function listFiles(dir: string): string[] {
 }
 
 async function check(root: string): Promise<number> {
-  const config = await loadConfig(root);
+  const config = await loadConfig(root, target);
   const srcDir = join(root, "src");
   const ctx = styleContext(config);
   let problems = 0;
@@ -88,7 +92,7 @@ async function check(root: string): Promise<number> {
 
 async function build(root: string, out: string | undefined, entry: string | undefined): Promise<number> {
   if ((await check(root)) !== 0) return 1;
-  const config = await loadConfig(root);
+  const config = await loadConfig(root, target);
   if (entry) config.entry = resolve(root, entry);
   try {
     const result = await buildProject(config, out);
@@ -115,11 +119,13 @@ async function main() {
       port: { type: "string" },
       out: { type: "string" },
       entry: { type: "string" },
+      target: { type: "string" },
       host: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
   const command = positionals[0];
+  target = values.target;
   const root = process.cwd();
 
   if (values.help || !command) {

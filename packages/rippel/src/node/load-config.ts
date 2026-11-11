@@ -48,14 +48,24 @@ function fail(file: string, message: string): never {
   throw new ConfigError(`${file}: ${message}`);
 }
 
-export async function loadConfig(root: string): Promise<ResolvedConfig> {
+export async function loadConfig(root: string, target?: string): Promise<ResolvedConfig> {
   const configFile = CONFIG_FILES.map((f) => join(root, f)).find(existsSync);
   if (!configFile) {
     throw new ConfigError(`No rippel.config.ts found in ${root}`);
   }
   const jiti = createJiti(import.meta.url, { moduleCache: false });
   const raw = await jiti.import<RippelConfig>(configFile, { default: true });
-  return resolveConfig(raw, root, configFile);
+  return resolveConfig(target ? applyTarget(raw, target, relative(root, configFile)) : raw, root, configFile);
+}
+
+/** Applies a target's overrides on top of the base config. */
+export function applyTarget(raw: RippelConfig, target: string, name: string): RippelConfig {
+  const overrides = raw?.targets?.[target];
+  if (!overrides) {
+    const known = Object.keys(raw?.targets ?? {});
+    fail(name, `there's no target "${target}". ${known.length ? `Targets: ${known.join(", ")}.` : "Add one under `targets`."}`);
+  }
+  return { ...raw, ...overrides };
 }
 
 export function resolveConfig(raw: RippelConfig, root: string, configFile: string): ResolvedConfig {
