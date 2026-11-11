@@ -6,7 +6,6 @@
 #include "board.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_log.h"
 #include "esp_rom_sys.h"
 
 #define SAMPLES 8
@@ -66,19 +65,19 @@ static void read_cb(lv_indev_t * indev, lv_indev_data_t * data)
         return;
     }
 
-    /* Across the panel's long side. */
+    /* The panel is mounted in landscape, so its X sheet runs along the screen's Y axis. */
     pin_float(BOARD_PIN_YM);
     pin_float(BOARD_PIN_YP);
     pin_drive(BOARD_PIN_XP, 1);
     pin_drive(BOARD_PIN_XM, 0);
-    int raw_long = read_adc(BOARD_ADC_YP);
+    int raw_y = read_adc(BOARD_ADC_YP);
 
-    /* Across the short side. */
+    /* And its Y sheet along the screen's X axis. */
     pin_float(BOARD_PIN_XM);
     pin_float(BOARD_PIN_XP);
     pin_drive(BOARD_PIN_YP, 1);
     pin_drive(BOARD_PIN_YM, 0);
-    int raw_short = read_adc(BOARD_ADC_XP);
+    int raw_x = read_adc(BOARD_ADC_XP);
 
     /* A finger lifting mid-read gives a junk position, so check again. */
     if(!is_pressed()) {
@@ -86,8 +85,8 @@ static void read_cb(lv_indev_t * indev, lv_indev_data_t * data)
         return;
     }
 
-    data->point.x = scale(raw_short, BOARD_TOUCH_X_MIN, BOARD_TOUCH_X_MAX, BOARD_LCD_WIDTH);
-    data->point.y = scale(raw_long, BOARD_TOUCH_Y_MIN, BOARD_TOUCH_Y_MAX, BOARD_LCD_HEIGHT);
+    data->point.x = scale(raw_x, BOARD_TOUCH_X_MIN, BOARD_TOUCH_X_MAX, BOARD_LCD_WIDTH);
+    data->point.y = scale(raw_y, BOARD_TOUCH_Y_MIN, BOARD_TOUCH_Y_MAX, BOARD_LCD_HEIGHT);
     data->state = LV_INDEV_STATE_PRESSED;
 }
 

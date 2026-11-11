@@ -36,6 +36,7 @@ static void read_sensor(void)
     if(room < setpoint_c) room++;
     else if(room > setpoint_c) room--;
     ui_set_temperature(room);
+    ESP_LOGI(TAG, "room=%d setpoint=%d", room, setpoint_c);
 }
 
 void app_main(void)

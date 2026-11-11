@@ -25,10 +25,11 @@
 #define BOARD_ADC_XP ADC_CHANNEL_8
 #define BOARD_ADC_YP ADC_CHANNEL_7
 
-/* Raw ADC readings at the panel's edges. Tune these for your panel. */
-#define BOARD_TOUCH_X_MIN 300
-#define BOARD_TOUCH_X_MAX 3800
-#define BOARD_TOUCH_Y_MIN 300
-#define BOARD_TOUCH_Y_MAX 3800
+/* Raw ADC readings at the panel's edges, measured by pressing its corners.
+ * MIN is the left or top edge, so MIN > MAX means that axis runs backwards. */
+#define BOARD_TOUCH_X_MIN 3920
+#define BOARD_TOUCH_X_MAX 445
+#define BOARD_TOUCH_Y_MIN 565
+#define BOARD_TOUCH_Y_MAX 3645
 
 #endif /* BOARD_H */
