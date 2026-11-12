@@ -256,12 +256,13 @@ Notes from bringing it up on the board:
 - **`createList`** holds records that change at runtime. It takes a fixed `capacity` and field types from the contract, like `{ rating: u8, name: str(16) }`, so storage is reserved at build time and strings have a known size. The device builds one row per slot up front, shows the slots in use, and moves rows when the order changes. Adding to a full list drops the oldest item.
 - **Images** come from importing a `.png` and passing it to `<image src>`. They're converted to the display's pixel format at build time and stored in flash, as RGB565, or RGB565A8 when they have transparency. `src` can change at runtime between images known at build time. `image-recolor` tints an image, and `fit` scales it, which costs CPU on every redraw.
 - **Firmware lists** are declared in the contract with `list({ capacity, fields })`. The UI reads them like a `createList` list but can't change them. The firmware fills them through generated `ui_<name>_add`, `_update`, `_remove` and `_clear` functions, where `add` returns an id for the other calls. In dev, the mock and the signals panel can fill them too.
-- `output.lvglHeapKB` sets LVGL's memory. Every branch is built up front, so a UI with several screens needs more than one screen's worth.
+- **Lazy branches.** `<Show lazy>`, `<Switch lazy>` or `<Match lazy>` builds a branch's objects when it opens and deletes them when it closes, instead of building every branch up front and hiding it. Each lazy branch becomes `build_<n>()`, which creates its objects, puts its top-level objects back in their place among their siblings and runs its bindings once. `teardown_<n>()` deletes them, and LVGL copes with that happening inside an event of one of the deleted objects, so a button can switch away from its own screen. Bindings inside a lazy branch do nothing while it's closed. Caches that bindings keep to skip repeated work live at file scope, so building a branch can reset them. `ui_obj()` returns NULL for an object whose branch is closed. The espresso demo's screens are lazy, which brings its peak LVGL heap from about 115 KB to about 50 KB. The cost is building a screen each time it opens. The dev runtime always works this way, so `lazy` only changes the device build.
+- `output.lvglHeapKB` sets LVGL's memory. Branches that aren't lazy are all built up front, so a UI with several such screens needs more than one screen's worth.
 
 Still to come:
 
 
-- More widgets, images, animations, multiple screens and navigation
+- More widgets, animations, and transitions between screens
 - Single-binary compiler (decision 10)
 - More integrations (Zephyr, PlatformIO), more MCU and display presets
 - Ship the simulator's LVGL objects in the npm package, so custom widgets can draw for real outside this repo
@@ -270,7 +271,7 @@ Still to come:
 
 1. **Numeric types (settled for now).** Inferred, as described under M2. Wider integer types for locals may be needed later.
 2. **Signals in C (settled).** Generated setters and bind functions. See M2.
-3. **`<Show>` default.** M2 hides prebuilt objects, which keeps memory predictable. Creating and destroying them could become an option for screens that are rarely open.
+3. **`<Show>` default (settled for now).** Branches are prebuilt and hidden unless they're `lazy`. Prebuilt switches instantly and keeps memory fixed. Lazy saves memory for screens that aren't always open. Lazy could become the default if it proves fast enough on slow chips.
 4. **Firmware-provided lists (settled).** Declared in the contract with a capacity, like `createList`. See M3.
 5. **LVGL version.** Pin one version per Rippel release? Allow user-supplied `lv_conf.h` overrides?
 6. **Reference hardware (settled).** An Adafruit QT Py ESP32-S3 and the Adafruit 3.5" 480×320 TFT.

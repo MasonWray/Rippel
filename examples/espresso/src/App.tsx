@@ -17,7 +17,8 @@ export default function App() {
     <view class="app">
       <Nav />
       <view class="content">
-        <Switch>
+        {/* Only the open screen's objects exist on the device. The others are built when they open. */}
+        <Switch lazy>
           <Match when={phase() === PHASE.done}>
             <Summary />
           </Match>
