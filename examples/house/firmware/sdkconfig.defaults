@@ -5,6 +5,9 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Full speed. ESP-IDF starts the S3 at 160 MHz.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_FREERTOS_HZ=1000
 
 # LVGL renders on the main task, and its software renderer overflows the default 3.5 KB stack.

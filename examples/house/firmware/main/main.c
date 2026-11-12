@@ -22,6 +22,12 @@ static const char * TAG = "house";
 static int64_t refresh_start;
 static int64_t refresh_us;
 static uint32_t refreshes;
+/* Time LVGL spends waiting for the display to take the last band */
+static int64_t wait_start;
+static int64_t wait_us;
+/* Time inside the board's flush, which waits for the band before to finish sending */
+static int64_t flush_start;
+static int64_t flush_us;
 
 static uint32_t tick_ms(void)
 {
@@ -30,12 +36,19 @@ static uint32_t tick_ms(void)
 
 static void refresh_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) == LV_EVENT_REFR_START) {
-        refresh_start = esp_timer_get_time();
-        return;
+    int64_t now = esp_timer_get_time();
+    switch(lv_event_get_code(e)) {
+        case LV_EVENT_REFR_START: refresh_start = now; break;
+        case LV_EVENT_REFR_READY:
+            refresh_us += now - refresh_start;
+            refreshes++;
+            break;
+        case LV_EVENT_FLUSH_WAIT_START: wait_start = now; break;
+        case LV_EVENT_FLUSH_WAIT_FINISH: wait_us += now - wait_start; break;
+        case LV_EVENT_FLUSH_START: flush_start = now; break;
+        case LV_EVENT_FLUSH_FINISH: flush_us += now - flush_start; break;
+        default: break;
     }
-    refresh_us += esp_timer_get_time() - refresh_start;
-    refreshes++;
 }
 
 static void log_stats(void)
@@ -44,11 +57,17 @@ static void log_stats(void)
     house_view_get_stats(ui_obj(UI_OBJ_HOUSE), &s);
     lv_mem_monitor_t mem;
     lv_mem_monitor(&mem);
-    ESP_LOGI(TAG, "%.1f fps | project %.2f ms, draw %.2f ms, whole refresh %.1f ms | view %u KB, LVGL %u KB, free %u KB",
-             s.fps, s.project_ms, s.draw_ms, refreshes ? refresh_us / 1000.0f / refreshes : 0.0f,
+    ESP_LOGI(TAG, "%.1f fps | project %.2f ms, draw %.2f ms, view in all %.1f ms, whole refresh %.1f ms, waiting for the display %.1f + %.1f ms | view %u KB, LVGL %u KB, free %u KB",
+             s.fps, s.project_ms, s.draw_ms, s.callback_ms, refreshes ? refresh_us / 1000.0f / refreshes : 0.0f,
+             refreshes ? wait_us / 1000.0f / refreshes : 0.0f, refreshes ? flush_us / 1000.0f / refreshes : 0.0f,
              (unsigned)(s.memory / 1024), (unsigned)((mem.total_size - mem.free_size) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+    ESP_LOGI(TAG, "  clear %.1f, slab %.1f, floor %.1f, walls %.1f, lines %.1f, dots %.1f, edges %.1f, stair %.1f ms",
+             s.phase_ms[0], s.phase_ms[1], s.phase_ms[2], s.phase_ms[3], s.phase_ms[4], s.phase_ms[5], s.phase_ms[6],
+             s.phase_ms[7]);
     refresh_us = 0;
+    wait_us = 0;
+    flush_us = 0;
     refreshes = 0;
 }
 
@@ -61,6 +80,10 @@ void app_main(void)
     board_create_input(disp);
     lv_display_add_event_cb(disp, refresh_cb, LV_EVENT_REFR_START, NULL);
     lv_display_add_event_cb(disp, refresh_cb, LV_EVENT_REFR_READY, NULL);
+    lv_display_add_event_cb(disp, refresh_cb, LV_EVENT_FLUSH_WAIT_START, NULL);
+    lv_display_add_event_cb(disp, refresh_cb, LV_EVENT_FLUSH_WAIT_FINISH, NULL);
+    lv_display_add_event_cb(disp, refresh_cb, LV_EVENT_FLUSH_START, NULL);
+    lv_display_add_event_cb(disp, refresh_cb, LV_EVENT_FLUSH_FINISH, NULL);
 
     ui_init(disp);
     ui_set_benchmark(BENCHMARK);

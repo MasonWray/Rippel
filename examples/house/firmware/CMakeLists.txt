@@ -7,4 +7,8 @@ set(EXTRA_COMPONENT_DIRS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# The house view redraws the whole view every frame, so it sends the display twice the shared board's default.
+idf_build_set_property(COMPILE_DEFINITIONS "BOARD_LCD_SPI_HZ=40000000" APPEND)
+
 project(house)
