@@ -19,7 +19,7 @@ import type { ResolvedConfig, ResolvedFont } from "../node/load-config.js";
 import { styleContext } from "../node/load-config.js";
 import { compileStyleSheet } from "../style/css.js";
 import type { StyleRule } from "../style/ir.js";
-import { compileUi, cssImportOrder, sigRef, widgetEnum, type Action, type Obj, type Signal, type UiProgram, type ValueInfo, type Widget } from "./compile.js";
+import { compileUi, cssImportOrder, sigRef, widgetEnum, type Action, type InitOp, type LazyBranch, type Obj, type Signal, type UiProgram, type ValueInfo, type Widget } from "./compile.js";
 import { emitStyles, fontSymbol, type EmittedRule } from "./styles.js";
 import { widgetHeader } from "./widgets.js";
 
@@ -110,6 +110,62 @@ function functionBlock(signature: string, body: string[]): string[] {
   return [signature, "{", ...lines, "}", ""];
 }
 
+/** C that creates objects and runs init lines. */
+function emitInit(ops: InitOp[], indent: string): string[] {
+  return ops.map((op) => {
+    if (op.op === "line") return `${indent}${op.text}`;
+    const parent = op.parent === "root" ? "ui_root" : op.parent.name;
+    const type = op.obj.isStatic ? "" : "lv_obj_t * ";
+    const create = op.create ? `${op.create}(${parent})` : `rp_obj_create(${widgetEnum(op.widget)}, ${parent})`;
+    return `${indent}${type}${op.obj.name} = ${create};`;
+  });
+}
+
+/**
+ * A lazy branch's top-level objects are created last, so each moves to its
+ * place among its siblings: after every earlier sibling that exists now.
+ */
+function placeRoots(program: UiProgram, branch: LazyBranch): string[] {
+  const own = new Set(branch.objects);
+  const out: string[] = [];
+  for (const op of branch.init) {
+    if (op.op !== "create" || !own.has(op.obj) || !branch.roots.includes(op.obj)) continue;
+    const siblings = program.children.get(op.parent === "root" ? "root" : op.parent.name) ?? [];
+    const at = siblings.indexOf(op.obj);
+    if (at === siblings.length - 1) continue;
+    const before = siblings.slice(0, at);
+    const always = before.filter((s) => !s.lazyRoot).length;
+    const maybe = before.filter((s) => s.lazyRoot).map((s) => `(${s.name} != NULL)`);
+    out.push(`lv_obj_move_to_index(${op.obj.name}, ${[String(always), ...maybe].join(" + ")});`);
+  }
+  return out;
+}
+
+function emitLazy(program: UiProgram, branch: LazyBranch): string[] {
+  const id = branch.id;
+  const statics = branch.objects.filter((o) => o.isStatic);
+  return [
+    `/* Lazy branch ${id}: built when it opens, deleted when it closes */`,
+    ...functionBlock(`static void build_${id}(void)`, [
+      ...emitInit(branch.init, ""),
+      ...placeRoots(program, branch),
+      `built_${id} = true;`,
+      ...branch.onBuild,
+      ...branch.binds.map((b) => `${b.name}();`),
+    ]),
+    ...functionBlock(`static void forget_${id}(void)`, [
+      `built_${id} = false;`,
+      ...branch.nested.map((n) => `forget_${n.id}();`),
+      ...statics.map((o) => `${o.name} = NULL;`),
+    ]),
+    ...functionBlock(`static void teardown_${id}(void)`, [
+      "/* Deleting an object deletes its children. LVGL copes with this running inside an event of one of them. */",
+      ...branch.roots.map((o) => `if(${o.name}) lv_obj_delete(${o.name});`),
+      `forget_${id}();`,
+    ]),
+  ];
+}
+
 function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[], customFonts: string[], dpi: number, handles: Obj[]): string {
   const firmware = program.signals.filter((s) => s.kind === "firmware");
   // List fields live in their list's storage, but get setters like local signals.
@@ -143,10 +199,19 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
   }
   if (program.actions.length) out.push("static ui_actions_t actions;", "");
 
+  out.push("static lv_obj_t * ui_root;");
   const statics = program.objects.filter((o) => o.isStatic);
   if (statics.length) {
     out.push("/* Objects that bindings update */");
     for (const o of statics) out.push(`static lv_obj_t * ${o.name};`);
+  }
+  out.push("");
+
+  if (program.lazy.length) {
+    out.push("/* Lazy branches */");
+    for (const l of program.lazy) {
+      out.push(`static bool built_${l.id};`, `static void build_${l.id}(void);`, `static void forget_${l.id}(void);`, `static void teardown_${l.id}(void);`);
+    }
     out.push("");
   }
 
@@ -173,6 +238,8 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
     out.push(...functionBlock(`static void ${h.name}(lv_event_t * e)`, body));
   }
 
+  for (const l of program.lazy) out.push(...emitLazy(program, l));
+
   if (firmware.length) out.push("/* Firmware signals */", "");
   for (const s of firmware) out.push(...[`void ui_set_${s.name}(${paramType(s.value)} value)`, "{", ...setterBody(s), "}", ""]);
 
@@ -186,19 +253,12 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
 
   out.push(...functionBlock("static void styles_init(void)", styleInit));
 
-  out.push("void ui_init(lv_display_t * disp)", "{", `    lv_display_set_dpi(disp, ${dpi});`, "    styles_init();", "    lv_obj_t * root = lv_display_get_screen_active(disp);", "");
-  for (const op of program.init) {
-    if (op.op === "line") {
-      out.push(`    ${op.text}`);
-      continue;
-    }
-    const parent = op.parent === "root" ? "root" : op.parent.name;
-    const type = op.obj.isStatic ? "" : "lv_obj_t * ";
-    const create = op.create ? `${op.create}(${parent})` : `rp_obj_create(${widgetEnum(op.widget)}, ${parent})`;
-    out.push(`    ${type}${op.obj.name} = ${create};`);
-  }
-  if (program.binds.length) out.push("");
-  for (const bind of program.binds) out.push(`    ${bind.name}();`);
+  out.push("void ui_init(lv_display_t * disp)", "{", `    lv_display_set_dpi(disp, ${dpi});`, "    styles_init();", "    ui_root = lv_display_get_screen_active(disp);", "");
+  out.push(...emitInit(program.init, "    "));
+  // A lazy branch's bindings run when it's built.
+  const eager = program.binds.filter((b) => b.lazy === undefined);
+  if (eager.length) out.push("");
+  for (const bind of eager) out.push(`    ${bind.name}();`);
   out.push("}", "");
   return out.join("\n");
 }

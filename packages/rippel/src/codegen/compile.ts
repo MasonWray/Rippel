@@ -61,6 +61,27 @@ export interface Action {
 export interface Bind {
   name: string;
   body: string[];
+  /** The lazy branch it belongs to. It does nothing while that branch isn't built. */
+  lazy?: number;
+}
+
+/**
+ * A `lazy` branch of a <Show> or <Switch>. Its objects are created when it
+ * opens and deleted when it closes, instead of being built up front.
+ */
+export interface LazyBranch {
+  id: number;
+  /** Creates the branch's objects. Runs in build_<id>(). */
+  init: InitOp[];
+  /** Bindings that update the branch's objects. They run once after it's built. */
+  binds: Bind[];
+  /** Its top-level objects. */
+  roots: Obj[];
+  objects: Obj[];
+  /** Lazy branches inside this one, torn down with it. */
+  nested: LazyBranch[];
+  /** Resets cached state each time it's built, before its bindings run. */
+  onBuild: string[];
 }
 
 export interface Handler {
@@ -80,6 +101,8 @@ export interface Obj {
   /** Referenced after init, so it needs file scope. */
   isStatic: boolean;
   handle?: string;
+  /** A top-level object of a lazy branch, so it only exists while that branch is built. */
+  lazyRoot?: boolean;
 }
 
 export type InitOp =
@@ -114,6 +137,9 @@ export interface UiProgram {
   /** Public functions for the firmware, declared in ui.h. */
   exports: { comment: string; signature: string; body: string[] }[];
   declarations: string[];
+  lazy: LazyBranch[];
+  /** Each parent's children in creation order, so a lazy branch can take its place among its siblings. Keyed by parent name. */
+  children: Map<string, Obj[]>;
 }
 
 /** C for adding or removing the styles of a set of classes, in cascade order. */
@@ -506,11 +532,15 @@ class Compiler {
     functions: [],
     exports: [],
     declarations: [],
+    lazy: [],
+    children: new Map(),
   };
   private readonly modules = new Map<string, Module>();
   private readonly contract = new Map<string, Binding>();
   private readonly names = new Set<string>();
   private instance = 0;
+  /** The lazy branch being compiled, if any. Objects, init code and bindings go into it. */
+  private lazy: LazyBranch | undefined;
   private counter = 0;
   /** Signals pinned to one table row while a value is evaluated per row. */
   private readonly overrides = new Map<Signal, number>();
@@ -1982,10 +2012,10 @@ class Compiler {
     this.program.functions.push({ signature: `static int32_t ${compareName}(int32_t ia, int32_t ib)`, body: compareBody });
 
     const rowsName = `view_${id}_rows`;
-    const baseName = `view_${id}_base`;
-    this.program.declarations.push(`static lv_obj_t * ${rowsName}[${list.capacity}];`, `static int32_t ${baseName};`);
+    const shownName = `view_${id}_shown`;
+    this.program.declarations.push(`static lv_obj_t * ${rowsName}[${list.capacity}];`, `static int32_t ${shownName}[${list.capacity}];`);
+    const shownCount = this.cache(`view_${id}_shown_count`, "int32_t", "-1");
     rows.forEach((row, i) => this.line(`${rowsName}[${i}] = ${row.name};`));
-    this.line(`${baseName} = lv_obj_get_index(${rowsName}[0]);`);
 
     const { storage, capacity } = list;
     this.bind("view", this.listDeps(list, reads, collected), undefined, [
@@ -2006,13 +2036,14 @@ class Compiler {
       "}",
       "order[j + 1] = item;",
       "}",
-      `static int32_t shown[${capacity}];`,
-      "static int32_t shown_count = -1;",
-      "if(count == shown_count && memcmp(order, shown, sizeof(int32_t) * (size_t)count) == 0) return;",
-      "shown_count = count;",
-      `memcpy(shown, order, sizeof(order));`,
+      `if(count == ${shownCount} && memcmp(order, ${shownName}, sizeof(int32_t) * (size_t)count) == 0) return;`,
+      `${shownCount} = count;`,
+      `memcpy(${shownName}, order, sizeof(order));`,
+      "/* The rows sit together among their siblings, starting at the lowest index. Something built since init may have moved them. */",
+      `int32_t base = lv_obj_get_index(${rowsName}[0]);`,
+      `for(int32_t k = 1; k < ${capacity}; k++) base = LV_MIN(base, lv_obj_get_index(${rowsName}[k]));`,
       "for(int32_t k = 0; k < count; k++) {",
-      `lv_obj_move_to_index(${rowsName}[order[k]], ${baseName} + k);`,
+      `lv_obj_move_to_index(${rowsName}[order[k]], base + k);`,
       "}",
     ]);
   }
@@ -2251,13 +2282,29 @@ class Compiler {
     const obj: Obj = { name, isStatic: false };
     this.program.objects.push(obj);
     this.program.usedWidgets.add(widget);
-    this.program.init.push({ op: "create", obj, widget, parent: place.parent, create });
+    (this.lazy?.init ?? this.program.init).push({ op: "create", obj, widget, parent: place.parent, create });
+    this.lazy?.objects.push(obj);
+    const parentName = place.parent === "root" ? "root" : place.parent.name;
+    const siblings = this.program.children.get(parentName) ?? [];
+    siblings.push(obj);
+    this.program.children.set(parentName, siblings);
     if (place.roots) place.roots.push(obj);
     return obj;
   }
 
   private line(text: string) {
-    this.program.init.push({ op: "line", text });
+    (this.lazy?.init ?? this.program.init).push({ op: "line", text });
+  }
+
+  /**
+   * A file-scope variable that a binding uses to skip work it already did.
+   * Building a lazy branch resets it, since the branch's objects are new.
+   */
+  private cache(base: string, ctype: string, initial: string): string {
+    const name = this.unique(`${base}_${this.program.declarations.length}`);
+    this.program.declarations.push(`static ${ctype} ${name} = ${initial};`);
+    this.lazy?.onBuild.push(`${name} = ${initial};`);
+    return name;
   }
 
   /** Runs `body` now if nothing can change it, and whenever a dependency changes otherwise. */
@@ -2267,8 +2314,10 @@ class Compiler {
       return;
     }
     if (obj) obj.isStatic = true;
-    const bind: Bind = { name: `bind_${this.program.binds.length}_${kind}`, body };
+    const lazy = this.lazy;
+    const bind: Bind = { name: `bind_${this.program.binds.length}_${kind}`, body: lazy ? [`if(!built_${lazy.id}) return;`, ...body] : body, lazy: lazy?.id };
     this.program.binds.push(bind);
+    lazy?.binds.push(bind);
     for (const signal of deps) signal.binds.push(bind);
   }
 
@@ -2385,12 +2434,17 @@ class Compiler {
     }
   }
 
-  /** <Show>, <Switch> and conditional JSX: builds every branch and shows the first that matches. */
-  private branches(list: { test: Expr | undefined; body: (place: Place) => void }[], place: Place, node: t.Node, module: Module) {
+  /**
+   * <Show>, <Switch> and conditional JSX: shows the first branch that matches.
+   * Branches are built up front and hidden, unless they're `lazy`: then they're
+   * built when they open and deleted when they close.
+   */
+  private branches(list: { test: Expr | undefined; body: (place: Place) => void; lazy?: boolean }[], place: Place, node: t.Node, module: Module) {
     const chain: string[] = [];
     const deps = union(place.guard, ...list.map((b) => b.test));
     const roots: Obj[][] = [];
     const resets: Signal[][] = [];
+    const lazies: (LazyBranch | undefined)[] = [];
 
     list.forEach((branch, index) => {
       const test = branch.test ? this.truthy(branch.test, node, module) : "true";
@@ -2400,7 +2454,26 @@ class Compiler {
       const guard = boolExpr(conds.length > 1 ? `(${conds.join(" && ")})` : conds[0], deps);
       const branchRoots: Obj[] = [];
       const branchResets: Signal[] = [];
-      branch.body({ parent: place.parent, guard, roots: branchRoots, resets: branchResets });
+      const outer = this.lazy;
+      let lazy: LazyBranch | undefined;
+      if (branch.lazy) {
+        lazy = { id: this.program.lazy.length, init: [], binds: [], roots: branchRoots, objects: [], nested: [], onBuild: [] };
+        this.program.lazy.push(lazy);
+        outer?.nested.push(lazy);
+        // build_<id>() creates the branch under its parent, so the parent needs file scope.
+        if (place.parent !== "root") place.parent.isStatic = true;
+        this.lazy = lazy;
+      }
+      try {
+        branch.body({ parent: place.parent, guard, roots: branchRoots, resets: branchResets });
+      } finally {
+        this.lazy = outer;
+      }
+      for (const obj of lazy ? branchRoots : []) {
+        obj.isStatic = true;
+        obj.lazyRoot = true;
+      }
+      lazies.push(lazy);
       roots.push(branchRoots);
       resets.push(branchResets);
       if (place.roots) place.roots.push(...branchRoots);
@@ -2414,24 +2487,47 @@ class Compiler {
 
     const body = [`int32_t active = ${select};`];
     roots.forEach((branchRoots, i) => {
+      if (lazies[i]) return;
       for (const obj of branchRoots) {
         obj.isStatic = true;
-        body.push(`lv_obj_set_hidden(${obj.name}, active != ${i});`);
+        // A lazy branch nested in this one only has objects while it's built.
+        body.push(obj.lazyRoot ? `if(${obj.name}) lv_obj_set_hidden(${obj.name}, active != ${i});` : `lv_obj_set_hidden(${obj.name}, active != ${i});`);
       }
     });
+    // Close before opening, so only one branch's objects use memory at a time.
+    lazies.forEach((lazy, i) => {
+      if (lazy) body.push(`if(active != ${i} && built_${lazy.id}) teardown_${lazy.id}();`);
+    });
     if (deps.size === 0) {
+      lazies.forEach((lazy, i) => {
+        if (lazy) body.push(`if(active == ${i}) build_${lazy.id}();`);
+      });
       this.line(`{ ${body.join(" ")} }`);
       return;
     }
     // The dev runtime rebuilds a branch when it reopens, so its local signals start over.
     if (resets.some((r) => r.length)) {
-      body.push("static int32_t shown = -2;", "if(active != shown) {", "shown = active;", "switch(active) {");
+      const shown = this.cache("shown", "int32_t", "-2");
+      body.push(`if(active != ${shown}) {`, `${shown} = active;`, "switch(active) {");
       resets.forEach((signals, i) => {
         if (signals.length) body.push(`case ${i}:`, ...signals.map((s) => `set_${s.name}(${s.initial});`), "break;");
       });
       body.push("default:", "break;", "}", "}");
     }
+    lazies.forEach((lazy, i) => {
+      if (lazy) body.push(`if(active == ${i} && !built_${lazy.id}) build_${lazy.id}();`);
+    });
     this.bind("branch", deps, undefined, body);
+  }
+
+  /** `lazy` on <Show>, <Switch> or <Match>: true, or a literal boolean. */
+  private lazyProp(attrs: { name: string; value: t.Node | undefined; node: t.Node }[], el: t.Node, module: Module): boolean {
+    const attr = attrs.find((a) => a.name === "lazy");
+    if (!attr) return false;
+    if (!attr.value) return true;
+    const value = unwrap(attr.value);
+    if (value.type !== "BooleanLiteral") this.fail(el, module, "`lazy` must be true or false, written in the code");
+    return value.value;
   }
 
   private attributes(el: t.JSXElement, module: Module) {
@@ -2491,27 +2587,31 @@ class Compiler {
       const when = attr("when");
       if (!when) this.fail(el, module, "<Show> needs a `when` prop");
       const fallback = attr("fallback");
+      const lazy = this.lazyProp(attrs, el, module);
       const list: Parameters<Compiler["branches"]>[0] = [
-        { test: this.expr(when, scope, module), body: (p) => this.children(el.children, scope, module, p) },
+        { test: this.expr(when, scope, module), body: (p) => this.children(el.children, scope, module, p), lazy },
       ];
-      if (fallback) list.push({ test: undefined, body: (p) => this.child(fallback, scope, module, p) });
+      if (fallback) list.push({ test: undefined, body: (p) => this.child(fallback, scope, module, p), lazy });
       this.branches(list, place, el, module);
       return;
     }
 
     if (name === "Switch") {
+      const lazy = this.lazyProp(attrs, el, module);
       const list: Parameters<Compiler["branches"]>[0] = [];
       for (const child of el.children) {
         if (child.type === "JSXText" && !child.value.trim()) continue;
         const nameNode = child.type === "JSXElement" ? child.openingElement.name : undefined;
         const isMatch = nameNode?.type === "JSXIdentifier" && lookup(scope, nameNode.name)?.k === "rippel" && (lookup(scope, nameNode.name) as { name: string }).name === "Match";
         if (child.type !== "JSXElement" || !isMatch) this.fail(child, module, "<Switch> can only contain <Match> elements");
-        const when = this.attributes(child, module).find((a) => a.name === "when")?.value;
+        const matchAttrs = this.attributes(child, module);
+        const when = matchAttrs.find((a) => a.name === "when")?.value;
         if (!when) this.fail(child, module, "<Match> needs a `when` prop");
-        list.push({ test: this.expr(when, scope, module), body: (p) => this.children(child.children, scope, module, p) });
+        const matchLazy = lazy || this.lazyProp(matchAttrs, child, module);
+        list.push({ test: this.expr(when, scope, module), body: (p) => this.children(child.children, scope, module, p), lazy: matchLazy });
       }
       const fallback = attr("fallback");
-      if (fallback) list.push({ test: undefined, body: (p) => this.child(fallback, scope, module, p) });
+      if (fallback) list.push({ test: undefined, body: (p) => this.child(fallback, scope, module, p), lazy });
       this.branches(list, place, el, module);
       return;
     }
@@ -2852,11 +2952,11 @@ class Compiler {
       select = `${alternatives[i].conds.map((c) => wrap(c.code)).join(" && ")} ? ${i} : ${select}`;
     }
 
+    const applied = this.cache("applied", "int32_t", "-1");
     const body = [
-      "static int32_t applied = -1;",
       `const int32_t next = ${select};`,
-      "if(next == applied) return;",
-      "applied = next;",
+      `if(next == ${applied}) return;`,
+      `${applied} = next;`,
       ...this.input.styles.remove(obj.name, all),
       "switch(next) {",
     ];

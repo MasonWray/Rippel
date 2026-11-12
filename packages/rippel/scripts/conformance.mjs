@@ -183,6 +183,8 @@ async function startC(exportedSignals, lists) {
   return {
     pointer: (x, y, down) => m._rp_sim_pointer(x, y, down ? 1 : 0),
     tick: () => m._rp_sim_tick(16),
+    /** LVGL heap in use now and at its peak, in bytes. */
+    heap: () => ({ used: m._rp_sim_mem_used(), peak: m._rp_sim_mem_max_used() }),
     setSignal(name, value) {
       const setter = m[`_ui_set_${snake(name)}`];
       if (!setter) throw new Error(`Generated code has no ui_set_${snake(name)}`);
@@ -310,6 +312,10 @@ try {
     }
     await check(step.name ?? JSON.stringify(step), step.quiet);
   }
+
+  const heap = c.heap();
+  const kb = (bytes) => `${(bytes / 1024).toFixed(1)} KB`;
+  console.log(`\nLVGL heap in the device build: ${kb(heap.used)} at the end, ${kb(heap.peak)} at the peak.`);
 } finally {
   await server.close();
 }

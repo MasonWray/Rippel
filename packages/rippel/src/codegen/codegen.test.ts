@@ -215,7 +215,7 @@ describe("rippel build", () => {
   describe("switch, checkbox and dropdown", () => {
     it("binds a switch and passes a boolean to its handler", async () => {
       const { ui, conf } = await build(app(`const [on, setOn] = createSignal(false); return <switch checked={on()} onChange={setOn} />;`));
-      expect(ui).toContain("rp_obj_create(RP_WIDGET_SWITCH, root)");
+      expect(ui).toContain("rp_obj_create(RP_WIDGET_SWITCH, ui_root)");
       expect(ui).toContain("const bool value = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);");
       expect(ui).toContain("set_on(value);");
       expect(ui).toContain("LV_EVENT_VALUE_CHANGED");
@@ -456,8 +456,78 @@ describe("rippel build", () => {
         `function Inner() { const [m, setM] = createSignal(1); return <button onClick={() => setM(m() + 1)}>{m()}</button>; }`,
       ),
     );
-    expect(ui).toContain("if(active != shown) {");
+    expect(ui).toMatch(/if\(active != shown_\d+\) \{/);
     expect(ui).toContain("set_m(1);");
+  });
+
+  describe("lazy branches", () => {
+    const screens = (lazy: string) =>
+      app(
+        `return (
+          <view>
+            <label>Header</label>
+            <Switch${lazy}>
+              <Match when={battery() === 0}><Home /></Match>
+              <Match when={battery() === 1}><view class="b"><label>{temperature()}</label></view></Match>
+            </Switch>
+            <label>Footer</label>
+          </view>
+        );`,
+        `function Home() { const [m, setM] = createSignal(1); return <button class="home" onClick={() => setM(m() + 1)}>{m()}</button>; }`,
+      );
+
+    it("builds a lazy branch when it opens and deletes it when it closes", async () => {
+      const { ui } = await build(screens(" lazy"));
+      expect(ui).toContain("if(active != 0 && built_0) teardown_0();");
+      expect(ui).toContain("if(active == 1 && !built_1) build_1();");
+      expect(ui).toMatch(/static void build_1\(void\)\n\{\n    o_b = rp_obj_create\(RP_WIDGET_VIEW, o_view\);/);
+      expect(ui).toMatch(/static void teardown_1\(void\)\n\{\n.*\n    if\(o_b\) lv_obj_delete\(o_b\);\n    forget_1\(\);/);
+      expect(ui).toMatch(/static void forget_1\(void\)\n\{\n    built_1 = false;\n(    o_\w+ = NULL;\n)*    o_b = NULL;/);
+    });
+
+    it("keeps a lazy branch in its place among its siblings", async () => {
+      const { ui } = await build(screens(" lazy"));
+      // After the header, and after the first branch when that exists.
+      expect(ui).toContain("lv_obj_move_to_index(o_b, 1 + (o_home != NULL));");
+    });
+
+    it("only updates a lazy branch while it's built", async () => {
+      const { ui } = await build(screens(" lazy"));
+      const bind = ui.match(/static void (bind_\d+_text)\(void\)\n\{\n    if\(!built_1\) return;/);
+      expect(bind).not.toBeNull();
+      // ui_init doesn't run it. build_1 does.
+      const init = ui.slice(ui.indexOf("void ui_init("));
+      expect(init).not.toContain(`${bind![1]}();`);
+      expect(ui).toMatch(new RegExp(`built_1 = true;\\n(.*\\n)*?    ${bind![1]}\\(\\);`));
+    });
+
+    it("forgets a nested lazy branch when its outer branch closes", async () => {
+      const { ui } = await build(
+        app(`return (
+          <view>
+            <Show when={online()} lazy>
+              <view class="outer">
+                <Show when={battery() > 50} lazy><label class="inner">Full</label></Show>
+              </view>
+            </Show>
+          </view>
+        );`),
+      );
+      // The outer branch deletes its own objects, which takes the inner ones with them.
+      expect(ui).toMatch(/static void forget_0\(void\)\n\{\n    built_0 = false;\n    forget_1\(\);/);
+      expect(ui).toMatch(/static void build_1\(void\)\n\{\n    o_inner = rp_obj_create\(RP_WIDGET_LABEL, o_outer\);/);
+      expect(ui).toContain("static lv_obj_t * o_outer;");
+    });
+
+    it("can make a single <Match> lazy", async () => {
+      const { ui } = await build(screens(""));
+      expect(ui).not.toContain("build_0");
+      const one = await build({
+        "src/App.tsx": screens("")["src/App.tsx"].replace("<Match when={battery() === 1}>", "<Match when={battery() === 1} lazy>"),
+      });
+      expect(one.ui).toContain("build_0");
+      expect(one.ui).toContain("o_home = rp_obj_create(RP_WIDGET_BUTTON, o_view)");
+    });
   });
 
   it("binds inline lengths that change at runtime", async () => {

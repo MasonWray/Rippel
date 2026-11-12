@@ -218,13 +218,18 @@ static void machine_tick(float dt)
     if(progress >= 1) finish_shot();
 }
 
+/* The longest lv_timer_handler() call since the last status line. Opening a
+ * screen builds it and draws it in one call, so this shows how long that takes. */
+static uint32_t slowest_ms;
+
 static void log_status(void)
 {
     lv_mem_monitor_t mem;
     lv_mem_monitor(&mem);
-    ESP_LOGI(TAG, "boiler=%.1f lvgl_used=%u KB lvgl_peak=%u KB stack_free=%u",
+    ESP_LOGI(TAG, "boiler=%.1f lvgl_used=%u KB lvgl_peak=%u KB slowest_frame=%u ms stack_free=%u",
              boiler, (unsigned)((mem.total_size - mem.free_size) / 1024), (unsigned)(mem.max_used / 1024),
-             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+             (unsigned)slowest_ms, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    slowest_ms = 0;
 }
 
 void app_main(void)
@@ -250,7 +255,9 @@ void app_main(void)
     uint32_t last_status = last_tick;
     uint32_t last_scan = last_tick;
     while(true) {
+        uint32_t started = tick_ms();
         uint32_t wait = lv_timer_handler();
+        slowest_ms = LV_MAX(slowest_ms, tick_ms() - started);
 
         uint32_t elapsed = lv_tick_elaps(last_tick);
         if(elapsed >= MACHINE_PERIOD_MS) {
