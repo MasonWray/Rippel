@@ -26,7 +26,7 @@ export interface ImageAsset {
   readonly data: string;
 }
 
-interface CommonProps {
+export interface CommonProps {
   /** Space-separated CSS class names. */
   class?: string;
   /** Inline styles. Numbers are px, except opacity and flex-grow. */

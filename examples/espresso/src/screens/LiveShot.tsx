@@ -1,7 +1,7 @@
 import { For } from "rippel";
 import { Gauge } from "../components/Gauge";
 import { ProfileChart } from "../components/ProfileChart";
-import { elapsedDs, flowMlS, phase, pressureBar, stopShot, weightG } from "../firmware.contract";
+import { elapsedDs, flowMlS, phase, PressureDial, pressureBar, stopShot, weightG } from "../firmware.contract";
 import { icons } from "../icons";
 import { accent, PHASE, recipe, targetYieldG } from "../state";
 
@@ -31,10 +31,13 @@ export function LiveShot() {
       </view>
 
       <view class="live-mid">
-        <Gauge size="lg" accent={accent()} min={0} max={120} value={Math.round(pressureBar() * 10)}>
-          <label class="readout-md">{pressureBar().toFixed(1)}</label>
-          <label class="muted">bar</label>
-        </Gauge>
+        <view class="dial">
+          <PressureDial class="dial-face" value={Math.round(pressureBar() * 10)} color={recipe().accentHex} />
+          <view class="dial-readout">
+            <label class="readout-sm">{pressureBar().toFixed(1)}</label>
+            <label class="muted">bar</label>
+          </view>
+        </view>
 
         <view class="live-center">
           <label class="readout-lg">{(elapsedDs() / 10).toFixed(1)}</label>

@@ -17,6 +17,12 @@ export interface RippelConfig {
   entry?: string;
   /** Firmware contract module. Defaults to "src/firmware.contract.ts" if it exists. */
   contract?: string;
+  /**
+   * Custom widgets declared in the contract with `widget()`. `sources` are the C
+   * files that implement them. The dev server compiles them into the simulator
+   * when Emscripten is available, and shows placeholders when it isn't.
+   */
+  widgets?: { sources: string[] };
   /** Dev-only script that plays the firmware in the simulator. Defaults to "src/firmware.mock.ts" if it exists. */
   mock?: string;
   display: DisplayConfig;
@@ -66,6 +72,8 @@ export interface ClientConfig {
   defaultFont: { family: string; size: number };
   rem: number;
   refreshHz: number;
+  /** Set when custom widgets show as placeholders, saying why. */
+  widgetsNote?: string;
 }
 
 export function resolveDisplay(display: DisplayConfig): Required<DisplayConfig> {

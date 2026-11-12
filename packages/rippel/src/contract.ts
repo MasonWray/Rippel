@@ -11,6 +11,8 @@
  */
 import { createSignal } from "solid-js";
 import { createList, type ListFields, type ListItem, type ListValues, type RippelList } from "./list.js";
+import type { CommonProps, JSX } from "./jsx-runtime.js";
+import { createElement, defineCustomWidget, spread } from "./runtime/renderer.js";
 
 export type IntName = "i8" | "u8" | "i16" | "u16" | "i32" | "u32";
 
@@ -193,10 +195,41 @@ export function list<F extends ListFields>(options: { capacity: number; fields: 
 
 export type { ListItem };
 
+export interface WidgetMeta {
+  kind: "widget";
+  props: Record<string, ValueType>;
+  /** Set by the dev shell from the export name. */
+  name?: string;
+}
+
+export type WidgetProps<P extends Record<string, ValueType>> = CommonProps & { [K in keyof P]?: ValueOf<P[K]> };
+
+export type FirmwareWidget<P extends Record<string, ValueType>> = ((props: WidgetProps<P>) => JSX.Element) & {
+  readonly [META]: WidgetMeta;
+};
+
+/**
+ * Declares a custom widget written in C. Use it in TSX like any element. The
+ * firmware implements ui_widget_<name>_create and one setter per prop, declared
+ * in the generated ui_widgets.h.
+ */
+export function widget<P extends Record<string, ValueType>>(props: P): FirmwareWidget<P> {
+  const meta: WidgetMeta = { kind: "widget", props };
+  const component = (componentProps: Record<string, unknown>) => {
+    if (!meta.name) throw new Error("A custom widget must be exported from the firmware contract");
+    const name = meta.name.replace(/[A-Z]/g, (c, i: number) => (i ? "_" : "") + c.toLowerCase());
+    defineCustomWidget(name, meta.name, props);
+    const node = createElement(`custom:${name}`);
+    spread(node, componentProps, true);
+    return node;
+  };
+  return Object.assign(component, { [META]: meta }) as unknown as FirmwareWidget<P>;
+}
+
 /** Dev shell: reads contract metadata from a value, if it is a signal, action or list. */
-export function contractMeta(value: unknown): SignalMeta | ActionMeta | ListMeta | undefined {
+export function contractMeta(value: unknown): SignalMeta | ActionMeta | ListMeta | WidgetMeta | undefined {
   if ((typeof value === "function" || (typeof value === "object" && value !== null)) && META in value) {
-    return (value as { [META]: SignalMeta | ActionMeta | ListMeta })[META];
+    return (value as { [META]: SignalMeta | ActionMeta | ListMeta | WidgetMeta })[META];
   }
   return undefined;
 }

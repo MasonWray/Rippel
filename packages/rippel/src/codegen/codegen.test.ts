@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 const CONTRACT = `
-  import { action, bool, f32, i16, list, signal, str, u8 } from "rippel/contract";
+  import { action, bool, f32, i16, list, signal, str, u8, widget } from "rippel/contract";
   export const temperature = signal(i16, { initial: 20 });
   export const level = signal(f32);
   export const online = signal(bool, { initial: true });
@@ -22,6 +22,7 @@ const CONTRACT = `
   export const battery = signal(u8);
   export const setpoint = action({ celsius: i16 });
   export const networks = list({ capacity: 4, fields: { ssid: str(16), rssi: i16 } });
+  export const Dial = widget({ value: u8, label: str(12), on: bool });
 `;
 
 /** Writes a project to a temp folder, builds it and returns its generated files. */
@@ -259,6 +260,39 @@ describe("rippel build", () => {
 
     it("rejects other image formats", async () => {
       await expect(build({ ...app(`return <view />;`, `import pic from "./pic.jpg";`), "src/pic.jpg": "x" })).rejects.toThrow(/Only .png/);
+    });
+  });
+
+  describe("custom widgets", () => {
+    const widgetUi = (body: string) => ({
+      "src/App.tsx": `
+        import { Dial, temperature, online } from "./firmware.contract";
+        export default function App() { ${body} }
+      `,
+    });
+
+    it("declares the C interface the firmware implements", async () => {
+      const { read, result } = await build(widgetUi(`return <Dial value={temperature()} label="Room" on={online()} />;`));
+      const header = read("ui_widgets.h");
+      expect(header).toContain("lv_obj_t * ui_widget_dial_create(lv_obj_t * parent);");
+      expect(header).toContain("void ui_widget_dial_set_value(lv_obj_t * obj, uint8_t value);");
+      expect(header).toContain("void ui_widget_dial_set_label(lv_obj_t * obj, const char * value);");
+      expect(result.files).toContain("ui_widgets.h");
+      expect(read("CMakeLists.txt")).not.toContain("# Custom widgets");
+    });
+
+    it("creates the widget with its own function and binds its props", async () => {
+      const { ui } = await build(widgetUi(`return <view><Dial class="d" value={temperature()} label="Room" on={online()} /></view>;`));
+      expect(ui).toContain('#include "ui_widgets.h"');
+      expect(ui).toMatch(/o_d = ui_widget_dial_create\(o_view\);/);
+      expect(ui).toContain("ui_widget_dial_set_value(o_d, (uint8_t)sig_temperature);");
+      expect(ui).toContain('ui_widget_dial_set_label(o_d, "Room");');
+      expect(ui).toContain("ui_widget_dial_set_on(o_d, sig_online);");
+    });
+
+    it("rejects unknown props and children", async () => {
+      await expect(build(widgetUi(`return <Dial size={3} />;`))).rejects.toThrow(/Unknown prop "size" on <Dial>/);
+      await expect(build(widgetUi(`return <Dial><view /></Dial>;`))).rejects.toThrow(/can't have children/);
     });
   });
 

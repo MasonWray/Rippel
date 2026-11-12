@@ -69,11 +69,13 @@ export async function startDevShell({ config, loadApp, loadContract, loadMock }:
   window.addEventListener("error", (e) => showError(e.error ?? e.message));
   window.addEventListener("unhandledrejection", (e) => showError(e.reason));
 
+  if (config.widgetsNote) console.warn(`Custom widgets are shown as placeholders, because ${config.widgetsNote}`);
   const specs = [
     `${display.width}×${display.height}`,
     display.colorFormat,
     `${display.dpi} dpi`,
     config.mcu?.name,
+    config.widgetsNote ? "custom widgets: placeholders" : undefined,
   ].filter(Boolean).join(" · ");
 
   const stage = h("main", { class: "rp-stage" },

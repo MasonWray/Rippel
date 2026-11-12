@@ -1,4 +1,4 @@
-import { action, bool, f32, i8, list, signal, str, u16, u8 } from "rippel/contract";
+import { action, bool, f32, i8, list, signal, str, u16, u32, u8, widget } from "rippel/contract";
 
 /** Boiler temperature in °C. */
 export const boilerC = signal(f32, { initial: 62 });
@@ -26,6 +26,12 @@ export const wifiNetworks = list({ capacity: 8, fields: { ssid: str(32), rssi: i
 
 /** The network the machine is connected to, or "" if none. */
 export const wifiSsid = signal(str(32));
+
+/**
+ * A pressure gauge drawn in C, in firmware/widgets/pressure_dial.c.
+ * `value` is in tenths of a bar, and `color` is 0xRRGGBB.
+ */
+export const PressureDial = widget({ value: u16, color: u32 });
 
 /** Asks the firmware to join a network. */
 export const connectWifi = action({ ssid: str(32) });

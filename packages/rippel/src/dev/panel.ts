@@ -135,7 +135,9 @@ export function createPanel(contract: Record<string, unknown> | undefined): HTML
     const meta = contractMeta(value);
     if (!meta) continue;
     meta.name = name;
-    if (meta.kind === "list") {
+    if (meta.kind === "widget") {
+      continue;
+    } else if (meta.kind === "list") {
       lists.push(listSection(meta));
     } else if (meta.kind === "signal") {
       signals.append(

@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { basename, dirname, extname, resolve } from "node:path";
 import { parseSync, type types as t } from "@babel/core";
 import { translateDeclarations, inlineDeclarations } from "../style/translate.js";
+import { widgetCreate, widgetFromShape, widgetSetter, type CustomWidget } from "./widgets.js";
 import type { StyleContext, StyleDecl } from "../style/ir.js";
 
 export class CodegenError extends Error {
@@ -72,7 +73,7 @@ export interface Handler {
 /** The C expression that reads a signal. */
 export const sigRef = (signal: Signal) => signal.code ?? `sig_${signal.name}`;
 
-export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar" | "image" | "switch" | "checkbox" | "dropdown";
+export type Widget = "view" | "label" | "button" | "slider" | "arc" | "bar" | "image" | "switch" | "checkbox" | "dropdown" | "custom";
 
 export interface Obj {
   name: string;
@@ -82,7 +83,7 @@ export interface Obj {
 }
 
 export type InitOp =
-  | { op: "create"; obj: Obj; widget: Widget; parent: Obj | "root" }
+  | { op: "create"; obj: Obj; widget: Widget; parent: Obj | "root"; create?: string }
   | { op: "line"; text: string };
 
 /** A class list that depends on signals. Exactly one alternative applies at a time. */
@@ -101,6 +102,8 @@ export interface UiProgram {
   /** Style rules are referenced by class name through this callback at emit time. */
   usedWidgets: Set<Widget>;
   usedFonts: Set<string>;
+  /** Custom widgets declared in the contract. */
+  widgets: CustomWidget[];
   /** Image files the UI uses: absolute path -> C symbol. */
   images: Map<string, string>;
   warnings: string[];
@@ -161,6 +164,7 @@ type Binding =
   | { k: "getter"; value: ConstValue }
   | { k: "unsupported"; message: string }
   | { k: "list"; list: ListInfo }
+  | { k: "widget"; widget: CustomWidget }
   | { k: "listItem"; list: ListInfo; slot: number }
   | { k: "listItemAt"; list: ListInfo; index: string; reads: Set<string> }
   | { k: "children"; nodes: JsxChild[]; scope: Scope; module: Module }
@@ -259,6 +263,7 @@ const WIDGET_ENUM: Record<Widget, string> = {
   switch: "RP_WIDGET_SWITCH",
   checkbox: "RP_WIDGET_CHECKBOX",
   dropdown: "RP_WIDGET_DROPDOWN",
+  custom: "",
 };
 export const widgetEnum = (w: Widget) => WIDGET_ENUM[w];
 
@@ -467,6 +472,7 @@ class Compiler {
     usedWidgets: new Set(),
     usedFonts: new Set(),
     images: new Map(),
+    widgets: [],
     warnings: [],
     tables: [],
     lists: [],
@@ -547,6 +553,19 @@ class Compiler {
           this.fail(decl, module, "Expected `export const name = signal(...)` or `action(...)`");
         }
         const name = decl.id.name;
+        if (init.callee.name === "widget") {
+          const shape = init.arguments[0];
+          if (shape?.type !== "ObjectExpression") this.fail(init, module, "widget() takes an object of prop types");
+          let widget: CustomWidget;
+          try {
+            widget = widgetFromShape(name, shape, file);
+          } catch (err) {
+            this.fail(init, module, err instanceof Error ? err.message : String(err));
+          }
+          this.program.widgets.push(widget);
+          this.contract.set(name, { k: "widget", widget });
+          continue;
+        }
         if (init.callee.name === "list") {
           const list = this.createList(name, init, module.scope, module, true);
           this.contract.set(name, { k: "list", list });
@@ -2177,12 +2196,12 @@ class Compiler {
 
   // ---------- JSX ----------
 
-  private newObject(widget: Widget, base: string, place: Place): Obj {
+  private newObject(widget: Widget, base: string, place: Place, create?: string): Obj {
     const name = this.unique(`o_${base.replace(/[^a-zA-Z0-9]/g, "_")}`);
     const obj: Obj = { name, isStatic: false };
     this.program.objects.push(obj);
     this.program.usedWidgets.add(widget);
-    this.program.init.push({ op: "create", obj, widget, parent: place.parent });
+    this.program.init.push({ op: "create", obj, widget, parent: place.parent, create });
     if (place.roots) place.roots.push(obj);
     return obj;
   }
@@ -2393,6 +2412,10 @@ class Compiler {
       this.builtin(el, binding.name, scope, module, place);
       return;
     }
+    if (binding?.k === "widget") {
+      this.widget(el, "custom", scope, module, place, binding.widget);
+      return;
+    }
     if (binding?.k !== "func") this.fail(nameNode, module, `Unknown element <${tag}>`);
 
     const props = new Map<string, Binding>();
@@ -2475,11 +2498,11 @@ class Compiler {
     this.fail(el, module, `<${name}> ${LATER}. It's planned for M3.`);
   }
 
-  private widget(el: t.JSXElement, widget: Widget, scope: Scope, module: Module, place: Place) {
+  private widget(el: t.JSXElement, widget: Widget, scope: Scope, module: Module, place: Place, custom?: CustomWidget) {
     const attrs = this.attributes(el, module);
     const classAttr = attrs.find((a) => a.name === "class");
     const firstClass = classAttr?.value?.type === "StringLiteral" ? classAttr.value.value.trim().split(/\s+/)[0] : undefined;
-    const obj = this.newObject(widget, firstClass ?? widget, place);
+    const obj = this.newObject(widget, firstClass ?? custom?.name ?? widget, place, custom ? widgetCreate(custom) : undefined);
     const childPlace: Place = { parent: obj, guard: place.guard, roots: undefined, resets: place.resets };
 
     const range = { min: undefined as Expr | undefined, max: undefined as Expr | undefined };
@@ -2499,6 +2522,30 @@ class Compiler {
         const e = this.expr(value, scope, module);
         return boolExpr(this.truthy(e, node, module), e.deps);
       };
+
+      const prop = custom?.props.find((p) => p.jsName === name);
+      if (custom && prop) {
+        if (!value) this.fail(node, module, `"${name}" needs a value`);
+        const e = this.expr(value, scope, module);
+        let code: string;
+        switch (prop.value.base) {
+          case "string":
+            if (e.type !== "string" || !e.code) this.fail(node, module, `"${name}" needs a plain string`);
+            code = e.code;
+            break;
+          case "bool":
+            code = this.truthy(e, node, module);
+            break;
+          case "float":
+            if (e.type === "string" || e.type === "bool") this.fail(node, module, `"${name}" needs a number`);
+            code = e.code;
+            break;
+          default:
+            code = `(${prop.value.ctype})${wrap(this.number(value, scope, module).code)}`;
+        }
+        this.bind("prop", e.deps, obj, [`${widgetSetter(custom, prop.name)}(${obj.name}, ${code});`]);
+        continue;
+      }
 
       if (name.startsWith("on")) {
         this.eventHandler(obj, widget, name, value, scope, module);
@@ -2586,7 +2633,7 @@ class Compiler {
           break;
         }
         default:
-          this.fail(node, module, `Unknown prop "${name}" on <${widget}>`);
+          this.fail(node, module, `Unknown prop "${name}" on <${custom?.jsName ?? widget}>`);
       }
     }
     emitRange();
@@ -2622,6 +2669,12 @@ class Compiler {
     if (widget === "label") {
       const text = this.textOf(el.children, scope, module);
       if (text) this.bind("text", text.deps, obj, setText(obj.name, text.node));
+      return;
+    }
+
+    if (widget === "custom") {
+      const content = el.children.some((c) => c.type !== "JSXText" || c.value.trim());
+      if (content) this.fail(el, module, "Custom widgets can't have children");
       return;
     }
 

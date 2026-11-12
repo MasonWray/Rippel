@@ -13,6 +13,8 @@ export default defineConfig({
     integration: "esp-idf",
     lvglHeapKB: 160,
   },
+  // C for the custom widgets declared in the contract.
+  widgets: { sources: ["firmware/widgets/pressure_dial.c"] },
   fonts: {
     // Only the glyphs the big readouts need, to keep flash use down.
     // Lato ships with LVGL's examples (SIL Open Font License).
