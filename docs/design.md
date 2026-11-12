@@ -69,6 +69,10 @@ A CSS subset that maps directly onto LVGL styles:
 - `transition` maps to LVGL style transitions. They run when a state changes (`:active`, `:checked`, `:disabled`), not when a class changes. LVGL has one duration, delay and easing per transition, and needs the properties listed, so `all` is an error.
 - A `:disabled` rule turns off the grey tint LVGL's theme adds, so the colors you write are the colors you get.
 - `align-items` also places the flex track, so a single line aligns against the whole container as it does in CSS.
+- `vw`, `vh`, `vmin` and `vmax` become pixels at compile time, from the configured display.
+- `position: absolute` with `left`/`right` and `top`/`bottom` takes an element out of its parent's layout and places it from those edges, relative to the parent's content area. `relative` isn't supported; `translate` nudges an element instead.
+- `align-self` is an error: LVGL's flex layout can't align one item differently from its siblings.
+- `refreshHz` in `rippel.config.ts` caps how often LVGL redraws, in the simulator and on the device. It defaults to 30.
 - `@media` queries are settled at compile time against the configured display, since it can't change at runtime. They support `width`, `height`, their `min-` and `max-` forms, and `orientation`, joined with `and` or commas. Only the matching rules reach the device. A block that doesn't match the current display isn't checked until you build for a display it matches.
 - Fonts are chosen by `font-family` and `font-size` together and must exist in the font catalog: built-in Montserrat sizes plus fonts from `rippel.config.ts`.
 - Anything unsupported is a build error with a clear message, never silently ignored.

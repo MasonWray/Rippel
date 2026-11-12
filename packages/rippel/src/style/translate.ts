@@ -68,15 +68,23 @@ function parseLength(token: string, ctx: StyleContext, opts: LengthOptions = {})
     if (opts.content) return { t: "content" };
     throw new StyleError(`"${token}" isn't supported here`);
   }
-  const m = /^(-?(?:\d+\.?\d*|\.\d+))(px|rem|%)?$/.exec(t);
+  const m = /^(-?(?:\d+\.?\d*|\.\d+))(px|rem|%|vw|vh|vmin|vmax)?$/.exec(t);
   if (!m) {
-    if (/^-?(?:\d+\.?\d*|\.\d+)(em|vw|vh|pt|ch)$/.test(t)) {
-      throw new StyleError(`Unit in "${token}" isn't supported. Use px, rem or %.`);
+    if (/^-?(?:\d+\.?\d*|\.\d+)(em|pt|ch|cm|mm|in)$/.test(t)) {
+      throw new StyleError(`Unit in "${token}" isn't supported. Use px, rem, %, vw or vh.`);
     }
     throw new StyleError(`Expected a length, got "${token}"`);
   }
   const n = Number(m[1]);
   const unit = m[2];
+  if (unit === "vw" || unit === "vh" || unit === "vmin" || unit === "vmax") {
+    // The display can't change size, so viewport units become pixels at build time.
+    const display = ctx.display;
+    if (!display) throw new StyleError(`"${token}" needs to know the display size`);
+    if (n < 0 && !opts.negative) throw new StyleError(`Negative value "${token}" isn't allowed here`);
+    const sizes = { vw: display.width, vh: display.height, vmin: Math.min(display.width, display.height), vmax: Math.max(display.width, display.height) };
+    return num(Math.round((n / 100) * sizes[unit]));
+  }
   if (n < 0 && !opts.negative) throw new StyleError(`Negative value "${token}" isn't allowed here`);
   if (unit === "%") {
     if (!opts.pct) throw new StyleError(`Percentages aren't supported here ("${token}")`);
@@ -241,9 +249,23 @@ interface Combined {
   flexWrap?: { value: string; index: number };
   alignItems?: StyleValue;
   alignContent?: boolean;
+  offsets?: Partial<Record<"left" | "right" | "top" | "bottom", { value: StyleValue; index: number }>>;
 }
 
 type Handler = (value: string, out: StyleDecl[], ctx: StyleContext, combined: Combined, index: number) => void;
+
+function offsetProp(side: "left" | "right" | "top" | "bottom"): Handler {
+  return (value, _out, ctx, combined, index) => {
+    const tokens = splitValue(value);
+    if (tokens.length !== 1) throw new StyleError("Expected a single value");
+    combined.offsets = { ...combined.offsets, [side]: { value: parseLength(tokens[0], ctx, { negative: true, pct: true }), index } };
+  };
+}
+
+function negate(value: StyleValue): StyleValue {
+  if (value.t === "num" || value.t === "pct") return { ...value, v: -value.v };
+  return value;
+}
 
 function lengthProp(prop: string, opts: LengthOptions): Handler {
   return (value, out, ctx) => {
@@ -451,6 +473,21 @@ const HANDLERS: Record<string, Handler> = {
     out.push({ prop: "LV_STYLE_FLEX_CROSS_PLACE", value: place });
     combined.alignItems = place;
   },
+  "align-self": () => {
+    throw new StyleError(
+      `LVGL's flex layout can't align one item differently. Wrap it in a view with its own align-items, or use position: absolute.`,
+    );
+  },
+  position: (value, out) => {
+    const v = value.trim().toLowerCase();
+    if (v === "absolute") out.push({ prop: "RP_FLOATING", value: num(1) });
+    else if (v === "static") out.push({ prop: "RP_FLOATING", value: num(0) });
+    else throw new StyleError(`Unsupported position "${value}". Supported: absolute, static. To nudge an element, use translate.`);
+  },
+  left: offsetProp("left"),
+  right: offsetProp("right"),
+  top: offsetProp("top"),
+  bottom: offsetProp("bottom"),
   "align-content": (value, out, _ctx, combined) => {
     out.push({ prop: "LV_STYLE_FLEX_TRACK_PLACE", value: pick(value, FLEX_ALIGN, "align-content") });
     combined.alignContent = true;
@@ -534,6 +571,18 @@ export function translateDeclarations(decls: CssDeclaration[], ctx: StyleContext
       prop: "LV_STYLE_FLEX_FLOW",
       value: constant(flexFlowName(combined.flexDirection?.value, combined.flexWrap?.value)),
     });
+  }
+
+  // An absolutely positioned element is placed from one horizontal and one vertical edge.
+  if (combined.offsets) {
+    const { left, right, top, bottom } = combined.offsets;
+    if (left && right) throw new StyleError("Set left or right, not both. Use width to size the element.", right.index);
+    if (top && bottom) throw new StyleError("Set top or bottom, not both. Use height to size the element.", bottom.index);
+    const vertical = bottom ? "BOTTOM" : "TOP";
+    const horizontal = right ? "RIGHT" : "LEFT";
+    out.push({ prop: "LV_STYLE_ALIGN", value: constant(`LV_ALIGN_${vertical}_${horizontal}`) });
+    out.push({ prop: "LV_STYLE_X", value: left ? left.value : right ? negate(right.value) : num(0) });
+    out.push({ prop: "LV_STYLE_Y", value: top ? top.value : bottom ? negate(bottom.value) : num(0) });
   }
 
   // LVGL's cross place only aligns items within their track, and a track is as

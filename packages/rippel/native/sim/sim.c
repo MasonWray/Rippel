@@ -151,6 +151,13 @@ EMSCRIPTEN_KEEPALIVE void rp_sim_pointer(int32_t x, int32_t y, int32_t down)
     if(pointer) lv_indev_read(pointer);
 }
 
+/* How often LVGL redraws, in milliseconds. Matches LV_DEF_REFR_PERIOD in a device build. */
+EMSCRIPTEN_KEEPALIVE void rp_sim_set_refresh_period(uint32_t ms)
+{
+    lv_timer_t * timer = lv_display_get_refr_timer(display);
+    if(timer) lv_timer_set_period(timer, ms);
+}
+
 EMSCRIPTEN_KEEPALIVE lv_obj_t * rp_sim_screen(void)
 {
     return lv_screen_active();

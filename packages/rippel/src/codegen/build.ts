@@ -259,6 +259,8 @@ function emitLvConf(config: ResolvedConfig, program: UiProgram, builtinSizes: Se
     "#define LV_USE_GRID 0",
     "#define LV_USE_FLEX 1",
     "",
+    `#define LV_DEF_REFR_PERIOD ${Math.round(1000 / config.refreshHz)}`,
+    "",
     "/* Fonts the styles use */",
     ...[10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 36, 40, 48].map((s) => `#define LV_FONT_MONTSERRAT_${s} ${sizes.has(s) ? 1 : 0}`),
     `#define LV_FONT_DEFAULT &lv_font_montserrat_${fallback}`,
@@ -379,7 +381,14 @@ export async function buildProject(config: ResolvedConfig, outDirOverride?: stri
     styleContext: styleContext(config),
     fontSymbol,
     styles: {
-      add: (obj, classes) => rulesFor(classes).map((r) => `rp_obj_add_style(${obj}, &${r.name}, ${r.selector});`),
+      add: (obj, classes, resetPosition) => {
+        const rules = rulesFor(classes);
+        const lines = rules.map((r) => `rp_obj_add_style(${obj}, &${r.name}, ${r.selector});`);
+        const position = [...rules].reverse().find((r) => r.floating !== undefined);
+        if (position || resetPosition) lines.push(`rp_obj_set_floating(${obj}, ${position?.floating ? "true" : "false"});`);
+        return lines;
+      },
+      hasPosition: (classes) => rulesFor(classes).some((r) => r.floating !== undefined),
       remove: (obj, classes) => rulesFor(classes).map((r) => `rp_obj_remove_style(${obj}, &${r.name}, ${r.selector});`),
     },
   });

@@ -119,6 +119,11 @@ void rp_obj_center(lv_obj_t * obj)
     lv_obj_center(obj);
 }
 
+void rp_obj_set_floating(lv_obj_t * obj, bool floating)
+{
+    lv_obj_set_floating(obj, floating);
+}
+
 static void forward_event(lv_event_t * e)
 {
     if(event_handler == NULL) return;
@@ -516,6 +521,9 @@ static const rp_const_t constants[] = {
     /* Text */
     C(LV_TEXT_ALIGN_AUTO), C(LV_TEXT_ALIGN_LEFT), C(LV_TEXT_ALIGN_CENTER), C(LV_TEXT_ALIGN_RIGHT),
     C(LV_TEXT_DECOR_NONE), C(LV_TEXT_DECOR_UNDERLINE), C(LV_TEXT_DECOR_STRIKETHROUGH),
+
+    /* Alignment, for position: absolute */
+    C(LV_ALIGN_TOP_LEFT), C(LV_ALIGN_TOP_RIGHT), C(LV_ALIGN_BOTTOM_LEFT), C(LV_ALIGN_BOTTOM_RIGHT),
 
     /* Sizes */
     C(LV_RADIUS_CIRCLE),

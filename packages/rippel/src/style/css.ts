@@ -184,6 +184,9 @@ export function compileStyleSheet(source: string, file: string, ctx: StyleContex
         if (err instanceof StyleError) throw new CssError(err.message, file, line, column);
         throw err;
       }
+      if (translated.some((d) => d.prop === "RP_FLOATING") && (parsed.selector.part !== "LV_PART_MAIN" || parsed.selector.states.length)) {
+        throw new CssError("`position` can only be set in rules without states or parts", file, line, column);
+      }
       // LVGL's theme tints disabled widgets grey. A :disabled rule states the
       // look it wants, so turn the tint off and show exactly those colors.
       const decls = parsed.selector.states.includes("LV_STATE_DISABLED")

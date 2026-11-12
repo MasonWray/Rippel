@@ -110,7 +110,13 @@ export async function startDevShell({ config, loadApp, loadContract, loadMock }:
     attachLvgl(sim.lv);
     // Debug handle for the browser console.
     (window as unknown as { __rippel: unknown }).__rippel = { lv: sim.lv };
-    setStyleContext({ fonts: config.fontCatalog, defaultFont: config.defaultFont, rem: config.rem });
+    setStyleContext({
+      fonts: config.fontCatalog,
+      defaultFont: config.defaultFont,
+      rem: config.rem,
+      display: { width: display.width, height: display.height },
+    });
+    sim.lv.setRefreshPeriod(Math.round(1000 / config.refreshHz));
 
     await Promise.all(config.fonts.map(async (font) => {
       const res = await fetch(font.url);

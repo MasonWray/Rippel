@@ -115,7 +115,9 @@ export interface UiProgram {
 
 /** C for adding or removing the styles of a set of classes, in cascade order. */
 export interface StyleLookup {
-  add(obj: string, classes: string[]): string[];
+  /** With `resetPosition`, also clears position: absolute when none of `classes` set it. */
+  add(obj: string, classes: string[], resetPosition?: boolean): string[];
+  hasPosition(classes: string[]): boolean;
   remove(obj: string, classes: string[]): string[];
 }
 
@@ -2713,6 +2715,7 @@ class Compiler {
     }
 
     const all = [...new Set(alternatives.flatMap((a) => words(a.text)))];
+    const positioned = this.input.styles.hasPosition(all);
     const deps = union(...alternatives.flatMap((a) => a.conds));
     let select = `${alternatives.length - 1}`;
     for (let i = alternatives.length - 2; i >= 0; i--) {
@@ -2728,7 +2731,7 @@ class Compiler {
       "switch(next) {",
     ];
     alternatives.forEach((alt, i) => {
-      body.push(`case ${i}:`, ...this.input.styles.add(obj.name, words(alt.text)), "break;");
+      body.push(`case ${i}:`, ...this.input.styles.add(obj.name, words(alt.text), positioned), "break;");
     });
     body.push("}");
     this.bind("class", deps, obj, body);
@@ -2815,6 +2818,10 @@ class Compiler {
       this.fail(n, module, err instanceof Error ? err.message : String(err));
     }
     for (const { prop, value: v } of decls) {
+      if (prop === "RP_FLOATING") {
+        this.line(`rp_obj_set_floating(${obj.name}, ${v.t === "num" && v.v === 1 ? "true" : "false"});`);
+        continue;
+      }
       switch (v.t) {
         case "num": this.line(`rp_obj_set_local_num(${obj.name}, ${prop}, ${v.v}, LV_PART_MAIN);`); break;
         case "pct": this.line(`rp_obj_set_local_num(${obj.name}, ${prop}, lv_pct(${v.v}), LV_PART_MAIN);`); break;

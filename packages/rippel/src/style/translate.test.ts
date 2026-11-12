@@ -112,6 +112,37 @@ describe("parseColor", () => {
   });
 });
 
+describe("layout additions", () => {
+  const ctx: StyleContext = { fonts: { montserrat: [14] }, defaultFont: { family: "montserrat", size: 14 }, rem: 16, display: { width: 480, height: 320 } };
+  const translate = (decls: Record<string, string>) =>
+    translateDeclarations(Object.entries(decls).map(([prop, value]) => ({ prop, value })), ctx);
+
+  it("turns viewport units into pixels for the configured display", () => {
+    expect(translate({ width: "50vw", height: "25vh", "min-width": "10vmin", "max-width": "10vmax" }).map((d) => d.value)).toEqual([
+      { t: "num", v: 240 },
+      { t: "num", v: 80 },
+      { t: "num", v: 32 },
+      { t: "num", v: 48 },
+    ]);
+  });
+
+  it("places an absolutely positioned element from its edges", () => {
+    expect(translate({ position: "absolute", right: "4px", top: "10%" })).toEqual([
+      { prop: "RP_FLOATING", value: { t: "num", v: 1 } },
+      { prop: "LV_STYLE_ALIGN", value: { t: "const", v: "LV_ALIGN_TOP_RIGHT" } },
+      { prop: "LV_STYLE_X", value: { t: "num", v: -4 } },
+      { prop: "LV_STYLE_Y", value: { t: "pct", v: 10 } },
+    ]);
+  });
+
+  it("explains what LVGL can't do", () => {
+    expect(() => translate({ "align-self": "center" })).toThrow(/Wrap it in a view/);
+    expect(() => translate({ position: "relative" })).toThrow(/translate/);
+    expect(() => translate({ left: "0", right: "0" })).toThrow(/not both/);
+    expect(() => translate({ width: "2em" })).toThrow(/px, rem, %, vw or vh/);
+  });
+});
+
 describe("transition", () => {
   const translate = (value: string) =>
     translateDeclarations([{ prop: "transition", value }], {

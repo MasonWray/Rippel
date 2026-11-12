@@ -1,7 +1,7 @@
 import { waterPct, phase } from "../firmware.contract";
 import logo from "../assets/logo.png";
 import { icons } from "../icons";
-import { PHASE, setTab, tab, waterLow } from "../state";
+import { PHASE, setTab, shots, tab, waterLow } from "../state";
 
 export function Nav() {
   const busy = () => phase() !== PHASE.idle;
@@ -14,6 +14,9 @@ export function Nav() {
       </button>
       <button class="nav-btn" checked={tab() === "history"} disabled={busy()} onClick={() => setTab("history")}>
         {icons.list}
+        <view class="badge" hidden={shots.size() === 0}>
+          <label class="badge-text">{shots.size()}</label>
+        </view>
       </button>
       <button class="nav-btn" checked={tab() === "settings"} disabled={busy()} onClick={() => setTab("settings")}>
         {icons.settings}

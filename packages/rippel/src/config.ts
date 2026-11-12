@@ -27,6 +27,8 @@ export interface RippelConfig {
   defaultFont?: { family: string; size: number };
   /** Pixels per rem. Defaults to 16. */
   rem?: number;
+  /** How many times a second LVGL may redraw. Defaults to 30. Lower saves CPU, higher looks smoother. */
+  refreshHz?: number;
   /**
    * Other hardware the same UI runs on. Each target overrides these settings,
    * and `--target <name>` on any command selects it. `@media` queries see the
@@ -43,7 +45,7 @@ export interface RippelConfig {
 }
 
 /** The settings a target can override. */
-export type TargetConfig = Partial<Pick<RippelConfig, "display" | "mcu" | "output" | "fonts" | "defaultFont" | "rem">>;
+export type TargetConfig = Partial<Pick<RippelConfig, "display" | "mcu" | "output" | "fonts" | "defaultFont" | "rem" | "refreshHz">>;
 
 /** Identity helper that gives rippel.config.ts type checking and autocompletion. */
 export function defineConfig(config: RippelConfig): RippelConfig {
@@ -63,6 +65,7 @@ export interface ClientConfig {
   fontCatalog: Record<string, number[]>;
   defaultFont: { family: string; size: number };
   rem: number;
+  refreshHz: number;
 }
 
 export function resolveDisplay(display: DisplayConfig): Required<DisplayConfig> {

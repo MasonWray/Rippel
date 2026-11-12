@@ -5,6 +5,8 @@ import type { StyleDecl, StyleRule, StyleSelector, StyleValue } from "../style/i
 
 export interface EmittedRule {
   className: string;
+  /** Set if the rule has `position`. */
+  floating?: boolean;
   /** Name of the lv_style_t variable. */
   name: string;
   /** C expression for the part and state selector. */
@@ -75,8 +77,12 @@ export function emitStyles(rules: StyleRule[]): EmittedStyles {
     const name = `st_${i}_${rule.className.replaceAll("-", "_")}`;
     out.declarations.push(`static lv_style_t ${name};`);
     out.init.push(`lv_style_init(&${name});`);
-    rule.decls.forEach((decl, index) => emitDecl(name, decl, index, out));
-    out.rules.push({ className: rule.className, name, selector: selectorExpr(rule.selector) });
+    let floating: boolean | undefined;
+    rule.decls.forEach((decl, index) => {
+      if (decl.prop === "RP_FLOATING") floating = decl.value.t === "num" && decl.value.v === 1;
+      else emitDecl(name, decl, index, out);
+    });
+    out.rules.push({ className: rule.className, name, selector: selectorExpr(rule.selector), floating });
   });
   return out;
 }
