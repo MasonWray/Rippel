@@ -141,6 +141,21 @@ interface Expr {
   deps: Set<Signal>;
   unsigned?: boolean;
   str?: StrNode;
+  /** Set when this is a division of two integers, so rounding and formatting can stay in integer math. */
+  ratio?: Ratio;
+}
+
+/** `num / den`, both integers. `of` is the float code it stands for, so a changed Expr doesn't keep a stale ratio. */
+interface Ratio {
+  num: string;
+  den: string;
+  of: string;
+  /** True when the result can't be negative. */
+  unsigned?: boolean;
+}
+
+function ratioOf(e: Expr): Ratio | undefined {
+  return e.ratio && e.ratio.of === e.code ? e.ratio : undefined;
 }
 
 type StrNode =
@@ -148,6 +163,8 @@ type StrNode =
   | { k: "ptr"; code: string; max: number }
   | { k: "int"; code: string; unsigned?: boolean }
   | { k: "float"; code: string; decimals?: number }
+  /** A number printed with fixed decimals from an integer: `neg` is a condition, `scaled` the magnitude times 10^decimals. */
+  | { k: "fixed"; neg?: string; scaled: string; decimals: number }
   | { k: "cond"; c: string; a: StrNode; b: StrNode }
   | { k: "cat"; parts: StrNode[] };
 
@@ -315,6 +332,7 @@ function strBound(node: StrNode): number {
     case "ptr": return node.max;
     case "int": return 11;
     case "float": return 32;
+    case "fixed": return 12 + node.decimals;
     case "cond": return Math.max(strBound(node.a), strBound(node.b));
     case "cat": return node.parts.reduce((sum, p) => sum + strBound(p), 0);
   }
@@ -342,7 +360,16 @@ function strPiece(node: StrNode): { format: string; args: string[] } | undefined
     case "lit": return { format: fmtEscape(node.v), args: [] };
     case "ptr": return { format: "%s", args: [node.code] };
     case "int": return node.unsigned ? { format: "%u", args: [`(unsigned)${wrap(node.code)}`] } : { format: "%d", args: [`(int)${wrap(node.code)}`] };
-    case "float": return { format: node.decimals === undefined ? "%g" : `%.${node.decimals}f`, args: [`(double)${wrap(node.code)}`] };
+    case "float": return { format: "%g", args: [`(double)${wrap(node.code)}`] };
+    case "fixed": {
+      const sign = node.neg ? { format: "%s", args: [`${wrap(node.neg)} ? "-" : ""`] } : { format: "", args: [] };
+      if (node.decimals === 0) return { format: `${sign.format}%u`, args: [...sign.args, `(unsigned)${node.scaled}`] };
+      const scale = 10 ** node.decimals;
+      return {
+        format: `${sign.format}%u.%0${node.decimals}u`,
+        args: [...sign.args, `(unsigned)(${node.scaled} / ${scale}u)`, `(unsigned)(${node.scaled} % ${scale}u)`],
+      };
+    }
     case "cond": return isPlain(node) ? { format: "%s", args: [plainCode(node)] } : undefined;
     case "cat": return undefined;
   }
@@ -1000,7 +1027,15 @@ class Compiler {
         if (a.type === "bool" && b.type === "bool") return boolExpr(`(${cond} ? ${a.code} : ${b.code})`, deps);
         if (a.type === "bool" || b.type === "bool") this.fail(n, module, "Both sides of this ?: need the same type for the device build");
         const type: Base = a.type === "float" || b.type === "float" ? "float" : "int";
-        return { type, code: `(${cond} ? ${a.code} : ${b.code})`, deps };
+        const code = `(${cond} ? ${a.code} : ${b.code})`;
+        // Keep a ratio when each side is a whole number or one, like `n ? sum / n : 0`.
+        const ra = a.type === "int" ? { num: a.code, den: "1" } : ratioOf(a);
+        const rb = b.type === "int" ? { num: b.code, den: "1" } : ratioOf(b);
+        const ratio =
+          type === "float" && ra && rb
+            ? { num: `(${cond} ? ${ra.num} : ${rb.num})`, den: `(${cond} ? ${ra.den} : ${rb.den})`, of: code }
+            : undefined;
+        return { type, code, deps, ratio };
       }
       case "LogicalExpression": {
         const a = this.expr(n.left, scope, module);
@@ -1050,9 +1085,15 @@ class Compiler {
         }
         return { type: a.type === "float" || b.type === "float" ? "float" : "int", code: `(${a.code} ${n.operator} ${b.code})`, deps };
       }
-      case "/":
+      case "/": {
         if (!isNumber(a) || !isNumber(b)) this.fail(n, module, `"/" needs numbers`);
-        return { type: "float", code: `((float)${wrap(a.code)} / ${wrap(b.code)})`, deps };
+        const code = `((float)${wrap(a.code)} / ${wrap(b.code)})`;
+        const ratio =
+          a.type === "int" && b.type === "int"
+            ? { num: a.code, den: b.code, of: code, unsigned: !!a.unsigned && (!!b.unsigned || /^\d+$/.test(b.code)) }
+            : undefined;
+        return { type: "float", code, deps, ratio };
+      }
       case "===":
       case "!==":
       case "==":
@@ -1086,8 +1127,10 @@ class Compiler {
       if (method === "toFixed") {
         const value = this.expr(callee.object, scope, module);
         const digits = n.arguments[0] ?? { type: "NumericLiteral", value: 0 };
-        if (digits.type !== "NumericLiteral") this.fail(n, module, "toFixed needs a literal number of digits");
-        return strExpr({ k: "float", code: value.code, decimals: digits.value }, value.deps);
+        if (digits.type !== "NumericLiteral" || !Number.isInteger(digits.value) || digits.value < 0 || digits.value > 6) {
+          this.fail(n, module, "toFixed needs a literal number of digits from 0 to 6");
+        }
+        return strExpr(this.fixed(value, digits.value, n, module), value.deps);
       }
       if (method === "toString" && n.arguments.length === 0) {
         const value = this.expr(callee.object, scope, module);
@@ -1118,14 +1161,20 @@ class Compiler {
     const [a, b] = args;
     switch (method) {
       case "round":
-        if (a.type === "int") return a;
-        return { type: "int", code: `(int32_t)floorf(${a.code} + 0.5f)`, deps };
       case "floor":
-        return a.type === "int" ? a : { type: "int", code: `(int32_t)floorf(${a.code})`, deps };
       case "ceil":
-        return a.type === "int" ? a : { type: "int", code: `(int32_t)ceilf(${a.code})`, deps };
-      case "trunc":
-        return a.type === "int" ? a : { type: "int", code: `(int32_t)${wrap(a.code)}`, deps };
+      case "trunc": {
+        if (a.type === "int") return a;
+        const ratio = ratioOf(a);
+        if (ratio) return { type: "int", code: `rp_div_${method}(${ratio.num}, ${ratio.den})`, deps };
+        const code = {
+          round: `(int32_t)floorf(${a.code} + 0.5f)`,
+          floor: `(int32_t)floorf(${a.code})`,
+          ceil: `(int32_t)ceilf(${a.code})`,
+          trunc: `(int32_t)${wrap(a.code)}`,
+        }[method];
+        return { type: "int", code, deps };
+      }
       case "abs":
         return a.type === "int" ? { type: "int", code: `LV_ABS(${a.code})`, deps } : { type: "float", code: `fabsf(${a.code})`, deps };
       case "min":
@@ -1849,10 +1898,11 @@ class Compiler {
     if (e.type === "string" || e.type === "bool") this.fail(arg, module, "list.sum needs a function that returns a number");
 
     const name = `sum_${this.program.functions.length}`;
+    const ctype = e.type === "int" ? "int32_t" : "float";
     this.program.functions.push({
-      signature: `static float ${name}(void)`,
+      signature: `static ${ctype} ${name}(void)`,
       body: [
-        "float total = 0;",
+        `${ctype} total = 0;`,
         `for(int32_t i = 0; i < ${list.capacity}; i++) {`,
         `if(${list.storage}[i].used) total += ${e.code};`,
         "}",
@@ -1861,7 +1911,7 @@ class Compiler {
     });
     const deps = this.listDeps(list, reads, collected);
     for (const d of deps) this.collect?.add(d);
-    return { type: "float", code: `${name}()`, deps };
+    return { type: e.type === "int" ? "int" : "float", code: `${name}()`, deps };
   }
 
   /** Works out which list and order a <For each={...}> shows. */
@@ -2644,8 +2694,34 @@ class Compiler {
   private number(node: t.Node, scope: Scope, module: Module): Expr {
     const e = this.expr(node, scope, module);
     if (e.type === "int") return e;
-    if (e.type === "float") return { ...e, code: `(int32_t)floorf(${e.code} + 0.5f)`, type: "int" };
+    const ratio = ratioOf(e);
+    if (ratio) return { type: "int", code: `rp_div_round(${ratio.num}, ${ratio.den})`, deps: e.deps };
+    if (e.type === "float") return { type: "int", code: `(int32_t)floorf(${e.code} + 0.5f)`, deps: e.deps };
     this.fail(node, module, "Expected a number");
+  }
+
+  /** `value.toFixed(decimals)`, printed from an integer so printf never needs float support. */
+  private fixed(value: Expr, decimals: number, node: t.Node, module: Module): StrNode {
+    const scale = 10 ** decimals;
+    if (value.type === "int") {
+      if (decimals === 0) return toStr(value);
+      return { k: "fixed", neg: value.unsigned ? undefined : `(${value.code} < 0)`, scaled: `rp_fixed_div(${value.code}, 1, ${scale})`, decimals };
+    }
+    const ratio = ratioOf(value);
+    if (ratio) {
+      return {
+        k: "fixed",
+        neg: ratio.unsigned
+          ? undefined
+          : /^\d+$/.test(ratio.den)
+            ? `(${ratio.num} < 0)`
+            : `(${ratio.num} != 0 && ((${ratio.num} < 0) != (${ratio.den} < 0)))`,
+        scaled: `rp_fixed_div(${ratio.num}, ${ratio.den}, ${scale})`,
+        decimals,
+      };
+    }
+    if (value.type !== "float") this.fail(node, module, "toFixed needs a number");
+    return { k: "fixed", neg: `(${value.code} < 0)`, scaled: `rp_fixed_float(${value.code}, ${scale})`, decimals };
   }
 
   private textOf(children: JsxChild[], scope: Scope, module: Module): { node: StrNode; deps: Set<Signal> } | undefined {
@@ -2747,7 +2823,8 @@ class Compiler {
     }
 
     const handler: Handler = { name: `on_${this.program.handlers.length}${snake(name.slice(2))}`, body };
-    if (takesValue) {
+    // Only read the widget's value when the handler uses it.
+    if (takesValue && body.some((line) => /\bvalue\b/.test(line))) {
       const target = "lv_event_get_target(e)";
       if (toggle) handler.valueDecl = `const bool value = lv_obj_has_state(${target}, LV_STATE_CHECKED);`;
       else if (widget === "dropdown") handler.valueDecl = `const int32_t value = (int32_t)lv_dropdown_get_selected(${target});`;

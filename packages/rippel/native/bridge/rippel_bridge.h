@@ -142,6 +142,59 @@ RP_API int32_t rp_const_count(void);
 RP_API const char * rp_const_name(int32_t index);
 RP_API int32_t rp_const_value(int32_t index);
 
+/* Integer arithmetic for the generated UI, so whole numbers never go through
+ * float math. Each matches what JavaScript gives for the same numbers, and
+ * division by zero gives 0 instead of crashing. */
+
+/* Math.floor(a / b) */
+static inline int32_t rp_div_floor(int64_t a, int64_t b)
+{
+    if(b == 0) return 0;
+    int64_t q = a / b;
+    if(a % b != 0 && (a < 0) != (b < 0)) q--;
+    return (int32_t)q;
+}
+
+/* Math.ceil(a / b) */
+static inline int32_t rp_div_ceil(int64_t a, int64_t b)
+{
+    return -rp_div_floor(-a, b);
+}
+
+/* Math.round(a / b): halves round up. */
+static inline int32_t rp_div_round(int64_t a, int64_t b)
+{
+    if(b < 0) {
+        a = -a;
+        b = -b;
+    }
+    return rp_div_floor(2 * a + b, 2 * b);
+}
+
+/* Math.trunc(a / b) */
+static inline int32_t rp_div_trunc(int64_t a, int64_t b)
+{
+    return b == 0 ? 0 : (int32_t)(a / b);
+}
+
+/* |a / b| * scale, rounded with halves going up, for toFixed. The caller
+ * prints the sign. */
+static inline uint32_t rp_fixed_div(int64_t a, int64_t b, int64_t scale)
+{
+    if(b == 0) return 0;
+    if(a < 0) a = -a;
+    if(b < 0) b = -b;
+    return (uint32_t)((2 * a * scale + b) / (2 * b));
+}
+
+/* |x| * scale, rounded with halves going up, for toFixed on a float. Printing
+ * the result as an integer keeps printf's float support out of the build. */
+static inline uint32_t rp_fixed_float(float x, int32_t scale)
+{
+    if(x < 0) x = -x;
+    return (uint32_t)(x * (float)scale + 0.5f);
+}
+
 #ifdef __cplusplus
 }
 #endif

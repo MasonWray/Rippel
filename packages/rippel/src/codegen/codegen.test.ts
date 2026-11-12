@@ -61,9 +61,38 @@ describe("rippel build", () => {
 
   it("formats text and only re-runs bindings that read a signal", async () => {
     const { ui } = await build(app(`return <view><label>Now {temperature()}° at {level().toFixed(1)}</label><label>{name()}</label></view>;`));
-    expect(ui).toMatch(/snprintf\(text, sizeof\(text\), "Now %d\\xc2\\xb0 at %\.1f", \(int\)sig_temperature, \(double\)sig_level\);/);
+    expect(ui).toContain(
+      'snprintf(text, sizeof(text), "Now %d\\xc2\\xb0 at %s%u.%01u", (int)sig_temperature, (sig_level < 0) ? "-" : "", (unsigned)(rp_fixed_float(sig_level, 10) / 10u), (unsigned)(rp_fixed_float(sig_level, 10) % 10u));',
+    );
     expect(ui).toMatch(/void ui_set_battery\(uint8_t value\)\n\{\n    if\(sig_battery == value\) return;\n    sig_battery = value;\n\}/);
     expect(ui).toContain("lv_strlcpy(sig_name, value, sizeof(sig_name));");
+  });
+
+  it("adds no float math to a UI that only uses whole numbers", async () => {
+    const { ui } = await build(
+      app(
+        `return (
+          <view>
+            <label>{secs().toFixed(1)} {(battery() / 3).toFixed(2)} {battery().toFixed(1)} {temperature().toFixed(0)}</label>
+            <label>{Math.round(temperature() / 4)} {Math.floor(temperature() / 4)} {Math.ceil(battery() / 4)} {Math.trunc(temperature() / 4)}</label>
+            <bar value={temperature() / 2} />
+            <label>{networks.sum((n) => n.rssi)}</label>
+            <label>{(networks.size() > 0 ? networks.sum((n) => n.rssi) / networks.size() : 0).toFixed(1)}</label>
+          </view>
+        );`,
+        `import { networks } from "./firmware.contract";
+         const secs = () => temperature() / 10;`,
+      ),
+    );
+    // The contract's f32 signal is declared as a float. Nothing else should be.
+    const code = ui.replace(/^.*\bsig_level\b.*$/gm, "").replace(/ui_set_level\(float value\)/g, "");
+    expect(code).not.toMatch(/\bfloat\b|\bdouble\b|floorf|ceilf|fmodf|%[.\d]*[fg]/);
+    expect(ui).toContain("rp_fixed_div(sig_temperature, 10, 10)");
+    expect(ui).toContain("rp_div_round(sig_temperature, 4)");
+    expect(ui).toContain("rp_div_floor(sig_temperature, 4)");
+    expect(ui).toContain("rp_div_ceil(sig_battery, 4)");
+    expect(ui).toContain("rp_div_trunc(sig_temperature, 4)");
+    expect(ui).toContain("rp_div_round(sig_temperature, 2)");
   });
 
   it("keeps a local signal an int until something assigns it a fraction", async () => {
