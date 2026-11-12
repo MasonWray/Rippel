@@ -14,6 +14,8 @@ interface MaterializedRule {
   order: number;
   selector: number;
   style: Ptr;
+  /** Set if the rule has `position`. */
+  floating?: boolean;
 }
 
 interface Sheet {
@@ -27,6 +29,13 @@ export interface StyledNode {
   classes: string[];
   appliedRules: MaterializedRule[];
   localProps: { prop: number; selector: number }[];
+  /** `position` from classes and from the inline style. The inline one wins, as in CSS. */
+  classFloating?: boolean;
+  inlineFloating?: boolean;
+}
+
+function applyFloating(lv: Lvgl, node: StyledNode) {
+  lv.objSetFloating(node.obj, node.inlineFloating ?? node.classFloating ?? false);
 }
 
 const sheets = new Map<string, Sheet>();
@@ -40,6 +49,7 @@ export function setStyleContext(ctx: StyleContext): void {
 }
 
 function setStyleProp(lv: Lvgl, style: Ptr, decl: StyleDecl) {
+  if (decl.prop === "RP_FLOATING") return;
   if (decl.value.t === "transition") {
     const { props, timeMs, delayMs, path } = decl.value;
     lv.styleSetTransition(style, props.map((p) => lv.constant(p)), timeMs, delayMs, lv.constant(path));
@@ -61,6 +71,11 @@ function applyClasses(lv: Lvgl, node: StyledNode) {
   const rules = node.classes.flatMap((c) => byClass.get(c) ?? []).sort((a, b) => a.order - b.order);
   for (const rule of rules) lv.objAddStyle(node.obj, rule.style, rule.selector);
   node.appliedRules = rules;
+  const positioned = [...rules].reverse().find((r) => r.floating !== undefined);
+  if (positioned || node.classFloating !== undefined) {
+    node.classFloating = positioned?.floating;
+    applyFloating(lv, node);
+  }
 }
 
 /** Recreates every shared style from the registered sheets and reapplies them. */
@@ -74,7 +89,13 @@ function rebuild(lv: Lvgl) {
     sheet.rules.forEach((rule, i) => {
       const style = lv.styleCreate();
       for (const decl of rule.decls) setStyleProp(lv, style, decl);
-      const materialized = { order: sheet.index * 100_000 + i, selector: selectorValue(lv, rule.selector), style };
+      const position = rule.decls.find((d) => d.prop === "RP_FLOATING");
+      const materialized = {
+        order: sheet.index * 100_000 + i,
+        selector: selectorValue(lv, rule.selector),
+        style,
+        floating: position?.value.t === "num" ? position.value.v === 1 : undefined,
+      };
       const list = byClass.get(rule.className) ?? [];
       list.push(materialized);
       byClass.set(rule.className, list);
@@ -107,12 +128,21 @@ export function setInlineStyle(node: StyledNode, style: InlineStyle | undefined)
   const lv = lvgl();
   for (const { prop, selector } of node.localProps) lv.objRemoveLocal(node.obj, prop, selector);
   node.localProps = [];
+  if (node.inlineFloating !== undefined) {
+    node.inlineFloating = undefined;
+    applyFloating(lv, node);
+  }
   if (!style) return;
   if (!styleContext) throw new Error("Style context isn't set");
 
   const selector = selectorValue(lv, { part: "LV_PART_MAIN", states: [] });
   for (const decl of translateDeclarations(inlineDeclarations(style), styleContext)) {
     if (decl.value.t === "transition") throw new Error("`transition` only works in a stylesheet, not in an inline style");
+    if (decl.prop === "RP_FLOATING") {
+      node.inlineFloating = decl.value.t === "num" && decl.value.v === 1;
+      applyFloating(lv, node);
+      continue;
+    }
     const prop = lv.constant(decl.prop);
     const value = resolveValue(lv, decl.value);
     if (value.kind === "color") lv.objSetLocalColor(node.obj, prop, value.v, selector);

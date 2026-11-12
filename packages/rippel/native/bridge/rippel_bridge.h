@@ -80,6 +80,8 @@ RP_API void rp_obj_set_parent(lv_obj_t * obj, lv_obj_t * parent, int32_t index);
 RP_API void rp_obj_set_state(lv_obj_t * obj, int32_t state, bool on);
 RP_API void rp_obj_set_hidden(lv_obj_t * obj, bool hidden);
 RP_API void rp_obj_center(lv_obj_t * obj);
+/* A floating object is left out of its parent's layout and placed with x, y and align (position: absolute). */
+RP_API void rp_obj_set_floating(lv_obj_t * obj, bool floating);
 /* Makes the object clickable and starts forwarding its events to the event handler. */
 RP_API void rp_obj_listen(lv_obj_t * obj);
 /* Makes the object clickable and calls cb directly for one event. Used by generated code. */

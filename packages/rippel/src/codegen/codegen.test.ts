@@ -134,6 +134,21 @@ describe("rippel build", () => {
     expect(ui).not.toContain("LV_STYLE_WIDTH, 99)");
   });
 
+  it("floats absolutely positioned elements, from classes or inline styles", async () => {
+    const { ui } = await build({
+      ...app(`return <view><view class={online() ? "badge" : "plain"} /><view style={{ position: "absolute", left: 3 }} /></view>;`, `import "./app.css";`),
+      "src/app.css": `.badge { position: absolute; right: 2px; top: 2px; } .plain { opacity: 1 }`,
+    });
+    expect(ui).toContain("rp_obj_set_floating(o_view_2, true);");
+    expect(ui).toMatch(/case 1:\n\s+rp_obj_add_style\(o_view_2, &st_1_plain, LV_PART_MAIN\);\n\s+rp_obj_set_floating\(o_view_2, false\);/);
+    expect(ui).toContain("rp_obj_set_floating(o_view_3, true);");
+  });
+
+  it("sets LVGL's refresh period from refreshHz", async () => {
+    const { conf } = await build(app(`return <view />;`));
+    expect(conf).toContain("#define LV_DEF_REFR_PERIOD 33");
+  });
+
   it("only enables the fonts and widgets the UI uses", async () => {
     const { conf } = await build({
       ...app(`return <view><arc class="big" /></view>;`, `import "./app.css";`),

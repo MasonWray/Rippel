@@ -34,6 +34,7 @@ export interface ResolvedConfig {
   fonts: ResolvedFont[];
   defaultFont: { family: string; size: number };
   rem: number;
+  refreshHz: number;
   output: RippelConfig["output"];
 }
 
@@ -126,8 +127,13 @@ export function resolveConfig(raw: RippelConfig, root: string, configFile: strin
     fonts,
     defaultFont: raw.defaultFont ?? { family: "montserrat", size: 14 },
     rem: raw.rem ?? 16,
+    refreshHz: raw.refreshHz ?? 30,
     output: raw.output,
   };
+
+  if (!Number.isFinite(resolved.refreshHz) || resolved.refreshHz < 1 || resolved.refreshHz > 120) {
+    fail(name, "`refreshHz` must be between 1 and 120.");
+  }
 
   const catalog = fontCatalog(resolved);
   const { family, size } = resolved.defaultFont;
@@ -162,5 +168,6 @@ export function clientConfig(config: ResolvedConfig): ClientConfig {
     fontCatalog: fontCatalog(config),
     defaultFont: config.defaultFont,
     rem: config.rem,
+    refreshHz: config.refreshHz,
   };
 }

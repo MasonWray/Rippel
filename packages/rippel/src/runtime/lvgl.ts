@@ -49,6 +49,8 @@ export interface Lvgl {
   objSetState(obj: Ptr, state: number, on: boolean): void;
   objSetHidden(obj: Ptr, hidden: boolean): void;
   objCenter(obj: Ptr): void;
+  objSetFloating(obj: Ptr, floating: boolean): void;
+  setRefreshPeriod(ms: number): void;
   objListen(obj: Ptr): void;
   labelSetText(obj: Ptr, text: string): void;
   sliderSetRange(obj: Ptr, min: number, max: number): void;
@@ -142,6 +144,8 @@ export async function loadLvgl(): Promise<Lvgl> {
     objSetState: (obj, state, on) => void m._rp_obj_set_state(obj, state, on ? 1 : 0),
     objSetHidden: (obj, hidden) => void m._rp_obj_set_hidden(obj, hidden ? 1 : 0),
     objCenter: (obj) => void m._rp_obj_center(obj),
+    objSetFloating: (obj, floating) => void m._rp_obj_set_floating(obj, floating ? 1 : 0),
+    setRefreshPeriod: (ms) => void m._rp_sim_set_refresh_period(ms),
     objListen: (obj) => void m._rp_obj_listen(obj),
     labelSetText(obj, text) {
       const ptr = m.stringToNewUTF8(text);

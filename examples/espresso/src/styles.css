@@ -97,6 +97,26 @@
   color: #ffffff;
 }
 
+/* A count pinned to the corner of the History button. */
+.badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #f5a524;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.badge-text {
+  color: #15171c;
+  font-size: 10px;
+}
+
 .nav-btn:disabled {
   background: transparent;
   color: #3a3e46;
@@ -208,7 +228,7 @@
 }
 
 .col-brew {
-  width: 164px;
+  width: 34vw;
   height: 100%;
   display: flex;
   flex-direction: column;
