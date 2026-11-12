@@ -18,7 +18,7 @@ Rippel is a toolchain for building embedded display UIs with web tooling. You wr
 | 8 | **Rippel is an npm package with a CLI and a root `rippel.config.ts`.** | It's the familiar Vite / Drizzle / Prisma pattern. Vite is used internally for the dev server. |
 | 9 | **Display, board and MCU are configuration from day one.** | Changing hardware should mean editing the config file, not reworking the project. |
 | 10 | **Shipping the compiler as one self-contained binary is a goal, not a requirement.** | Firmware CI shouldn't need Node if we can avoid it. We'll drop or defer this if it costs too much. |
-| 11 | **Custom C widgets show as placeholders in the simulator at first.** | Showing them for real means compiling the user's C into the WASM build, which needs Emscripten on the user's machine. That's deferred. |
+| 11 | **Custom C widgets draw for real in the simulator when Emscripten is installed, and show as placeholders when it isn't.** | Drawing them means compiling the user's C into the WASM build, which needs Emscripten on the user's machine. |
 
 ## Architecture
 
@@ -189,7 +189,7 @@ LVGL is compiled to WASM once and shipped inside the npm package, with every sup
 
 Without escape hatches, people end up editing generated code. Rippel needs:
 
-- **Custom widgets:** a C function in user-owned code, declared in the contract and used as `<custom:Gauge value={x()} />`. The simulator shows a labeled placeholder (decision 11).
+- **Custom widgets:** declared in the contract with `widget({ value: u16, ... })` and used in TSX like any element, `<PressureDial value={x()} />`. `rippel build` writes `ui_widgets.h`, declaring `ui_widget_<name>_create(parent)` and one `ui_widget_<name>_set_<prop>(obj, value)` per prop, which the user implements in their own C. `widgets.sources` in `rippel.config.ts` lists those C files. `rippel build` adds them to the generated component's CMakeLists.txt, so they compile next to the UI that calls them. The dev server compiles them into the simulator, together with the prebuilt LVGL objects, and rebuilds when they change. If Emscripten or the objects are missing, the widget shows as a labeled placeholder with its current props (decision 11).
 - **Named object handles:** `<view id="statusBar">` generates `ui_obj(UI_OBJ_STATUS_BAR)`, returning the `lv_obj_t*` for the rare case firmware needs raw LVGL access.
 
 ## Milestones
@@ -264,7 +264,7 @@ Still to come:
 - More widgets, images, animations, multiple screens and navigation
 - Single-binary compiler (decision 10)
 - More integrations (Zephyr, PlatformIO), more MCU and display presets
-- Real custom widgets in the simulator
+- Ship the simulator's LVGL objects in the npm package, so custom widgets can draw for real outside this repo
 
 ## Open questions
 

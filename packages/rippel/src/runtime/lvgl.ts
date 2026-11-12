@@ -51,6 +51,10 @@ export interface Lvgl {
   objCenter(obj: Ptr): void;
   objSetFloating(obj: Ptr, floating: boolean): void;
   setRefreshPeriod(ms: number): void;
+  /** Calls a custom widget's create function, if this simulator build includes it. */
+  customCreate(name: string, parent: Ptr): Ptr | undefined;
+  /** Calls a custom widget's prop setter. Returns false if the build doesn't include it. */
+  customSet(fn: string, obj: Ptr, value: unknown, kind: "int" | "float" | "bool" | "string"): boolean;
   objListen(obj: Ptr): void;
   labelSetText(obj: Ptr, text: string): void;
   sliderSetRange(obj: Ptr, min: number, max: number): void;
@@ -146,6 +150,22 @@ export async function loadLvgl(): Promise<Lvgl> {
     objCenter: (obj) => void m._rp_obj_center(obj),
     objSetFloating: (obj, floating) => void m._rp_obj_set_floating(obj, floating ? 1 : 0),
     setRefreshPeriod: (ms) => void m._rp_sim_set_refresh_period(ms),
+    customCreate(name, parent) {
+      const create = m[`_ui_widget_${name}_create`];
+      return typeof create === "function" ? create(parent) : undefined;
+    },
+    customSet(fn, obj, value, kind) {
+      const setter = m[`_${fn}`];
+      if (typeof setter !== "function") return false;
+      if (kind === "string") {
+        const ptr = m.stringToNewUTF8(String(value ?? ""));
+        setter(obj, ptr);
+        m._free(ptr);
+      } else {
+        setter(obj, kind === "bool" ? (value ? 1 : 0) : Number(value ?? 0));
+      }
+      return true;
+    },
     objListen: (obj) => void m._rp_obj_listen(obj),
     labelSetText(obj, text) {
       const ptr = m.stringToNewUTF8(text);

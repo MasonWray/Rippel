@@ -63,6 +63,7 @@ const { createServer } = await import("vite");
 const { loadConfig, styleContext } = await import("../dist/node/load-config.js");
 const { rippel } = await import("../dist/vite/plugin.js");
 const { buildFont } = await import("../dist/node/fonts.js");
+const { contractWidgets, widgetExports, widgetHeader } = await import("../dist/codegen/widgets.js");
 
 const config = await loadConfig(projectDir, targetArg || undefined);
 if (entryArg) config.entry = resolve(projectDir, entryArg);
@@ -70,6 +71,18 @@ const { width, height, colorFormat, dpi } = config.display;
 const COLOR_FORMAT = { RGB565: 0, RGB888: 1, XRGB8888: 2 };
 const scenarioFile = scenarioArg ? resolve(scenarioArg) : join(projectDir, "conformance.json");
 const scenario = existsSync(scenarioFile) ? JSON.parse(readFileSync(scenarioFile, "utf8")) : [];
+
+// Custom widget C goes into both builds, so both draw the real widget.
+const widgets = config.contract ? contractWidgets(config.contract) : [];
+const widgetObjects = [];
+if (widgets.length) {
+  writeFileSync(join(tmpDir, "ui_widgets.h"), widgetHeader(widgets));
+  for (const [i, source] of (config.widgets?.sources ?? []).entries()) {
+    const object = join(tmpDir, `widget-${i}.o`);
+    await run(emcc, [...cflags, "-I", tmpDir, "-c", source, "-o", object]);
+    widgetObjects.push(object);
+  }
+}
 
 console.log("Linking the WASM builds...");
 const sources = readdirSync(generatedDir).filter((f) => f.endsWith(".c") && f !== "rippel_bridge.c");
@@ -80,7 +93,7 @@ for (const source of sources) {
   compiled.push(object);
 }
 
-globalThis.__rippelDevFactory = await link("dev", [], ["_malloc", "_free"]);
+globalThis.__rippelDevFactory = await link("dev", widgetObjects, ["_malloc", "_free", ...widgetExports(widgets)]);
 
 // The dev side: the real renderer and style registry, loaded through Vite so TSX and CSS compile as in `rippel dev`.
 const FACTORY_ID = "\0conformance:lvgl-factory";
@@ -126,6 +139,11 @@ async function startDev() {
   }
 
   const contract = config.contract ? await load(config.contract) : {};
+  // The dev shell names contract entries from their exports. Custom widgets need their names.
+  for (const [name, value] of Object.entries(contract)) {
+    const meta = contractMeta(value);
+    if (meta) meta.name = name;
+  }
   const app = await load(config.entry);
   render(() => createComponent(app.default, {}), createRoot());
   await settle();
@@ -155,7 +173,7 @@ async function startDev() {
 
 async function startC(exportedSignals, lists) {
   const listExports = Object.keys(lists).flatMap((name) => ["add", "update", "remove", "clear"].map((op) => `_ui_${snake(name)}_${op}`));
-  const factory = await link("c", compiled, ["_malloc", "_free", "_ui_init", "_lv_display_get_default", ...exportedSignals, ...listExports]);
+  const factory = await link("c", [...compiled, ...widgetObjects], [...widgetExports(widgets), "_malloc", "_free", "_ui_init", "_lv_display_get_default", ...exportedSignals, ...listExports]);
   const m = await factory();
   if (m._rp_sim_init(width, height, COLOR_FORMAT[colorFormat], dpi) !== 0) throw new Error("Simulator failed to start");
   m.onRippelEvent = () => {};

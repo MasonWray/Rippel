@@ -356,6 +356,27 @@
 
 /* Live shot */
 
+/* The pressure dial is drawn in C. The readout sits in the gap at the bottom of its sweep. */
+.dial {
+  width: 150px;
+  height: 150px;
+}
+
+.dial-face {
+  width: 100%;
+  height: 100%;
+}
+
+.dial-readout {
+  position: absolute;
+  width: 100%;
+  left: 0;
+  bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .steps {
   display: flex;
   gap: 4px;

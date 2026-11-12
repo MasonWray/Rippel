@@ -19,6 +19,8 @@ export interface Recipe {
   name: string;
   icon: ImageAsset;
   accent: Accent;
+  /** The accent as 0xRRGGBB, for widgets drawn in C. */
+  accentHex: number;
   doseTenths: number;
   ratioTenths: number;
   tempC: number;
@@ -31,6 +33,7 @@ export const RECIPES: Recipe[] = [
     name: "Classic",
     icon: classicIcon,
     accent: "amber",
+    accentHex: 0xf5a524,
     doseTenths: 180,
     ratioTenths: 20,
     tempC: 93,
@@ -45,6 +48,7 @@ export const RECIPES: Recipe[] = [
     name: "Bloom",
     icon: bloomIcon,
     accent: "teal",
+    accentHex: 0x2dd4bf,
     doseTenths: 180,
     ratioTenths: 25,
     tempC: 92,
@@ -60,6 +64,7 @@ export const RECIPES: Recipe[] = [
     name: "Lever",
     icon: leverIcon,
     accent: "rose",
+    accentHex: 0xfb7185,
     doseTenths: 170,
     ratioTenths: 22,
     tempC: 94,
@@ -74,6 +79,7 @@ export const RECIPES: Recipe[] = [
     name: "Turbo",
     icon: turboIcon,
     accent: "violet",
+    accentHex: 0xa78bfa,
     doseTenths: 150,
     ratioTenths: 30,
     tempC: 90,

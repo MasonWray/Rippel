@@ -13,6 +13,7 @@ import solid from "vite-plugin-solid";
 import { normalizePath, type Plugin, type PluginOption } from "vite";
 import { buildFont } from "../node/fonts.js";
 import { convertImage } from "../node/images.js";
+import { buildCustomSimulator, type SimulatorBuild } from "../node/widgets.js";
 import { clientConfig, FONT_URL_PREFIX, styleContext, type ResolvedConfig } from "../node/load-config.js";
 import { validateSource } from "../node/validator.js";
 import { compileStyleSheet } from "../style/css.js";
@@ -51,9 +52,21 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
   const cacheDir = join(root, "node_modules", ".rippel", "fonts");
   const ctx = styleContext(config);
 
+  // A simulator build that includes the project's custom widget C, when there is one.
+  let simulator: SimulatorBuild = { kind: "none" };
+  const reportSimulator = () => {
+    if (simulator.kind === "built") console.log(`  Custom widgets: compiled into the simulator (${simulator.widgets.map((w) => w.jsName).join(", ")})`);
+    if (simulator.kind === "placeholder") console.log(`  Custom widgets: shown as placeholders, because ${simulator.reason}`);
+  };
+
   const core: Plugin = {
     name: "rippel",
     enforce: "pre",
+
+    async buildStart() {
+      simulator = await buildCustomSimulator(config);
+      reportSimulator();
+    },
 
     config() {
       return {
@@ -68,6 +81,17 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
     },
 
     configureServer(server) {
+      const sources = (config.widgets?.sources ?? []).map((s) => normalizePath(s));
+      if (sources.length) {
+        server.watcher.add(sources);
+        server.watcher.on("change", async (file) => {
+          if (!sources.includes(normalizePath(file))) return;
+          simulator = await buildCustomSimulator(config);
+          reportSimulator();
+          server.moduleGraph.invalidateAll();
+          server.ws.send({ type: "full-reload" });
+        });
+      }
       server.middlewares.use(async (req, res, next) => {
         const url = (req.url ?? "/").split("?")[0];
         try {
@@ -102,6 +126,7 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
 
     resolveId(source, importer) {
       if (source === CLIENT_ID) return RESOLVED_CLIENT_ID;
+      if (simulator.kind === "built" && source.endsWith("rippel-lvgl.mjs")) return simulator.module;
       if (importer && /\.png$/i.test(source) && !importer.startsWith("\0")) {
         const file = normalizePath(resolve(dirname(importer), source));
         if (isUserFile(file, root)) return IMAGE_PREFIX + file + STYLE_SUFFIX;
@@ -124,7 +149,7 @@ export function rippel(config: ResolvedConfig): PluginOption[] {
         return [
           `import { startDevShell } from "rippel/dev-shell";`,
           `startDevShell({`,
-          `  config: ${JSON.stringify(clientConfig(config))},`,
+          `  config: ${JSON.stringify({ ...clientConfig(config), widgetsNote: simulator.kind === "placeholder" ? simulator.reason : undefined })},`,
           `  loadApp: () => import(${JSON.stringify(urlFor(root, config.entry))}),`,
           `  loadContract: ${loadContract},`,
           `  loadMock: ${loadMock},`,

@@ -29,6 +29,7 @@ export interface ResolvedConfig {
   entry: string;
   contract: string | undefined;
   mock: string | undefined;
+  widgets: { sources: string[] } | undefined;
   display: Required<DisplayConfig>;
   mcu: McuConfig | undefined;
   fonts: ResolvedFont[];
@@ -102,6 +103,15 @@ export function resolveConfig(raw: RippelConfig, root: string, configFile: strin
     mock = abs("src/firmware.mock.ts");
   }
 
+  let widgets: ResolvedConfig["widgets"];
+  if (raw.widgets) {
+    const sources = (raw.widgets.sources ?? []).map(abs);
+    for (const [i, source] of sources.entries()) {
+      if (!existsSync(source)) fail(name, `widget source ${raw.widgets.sources[i]} doesn't exist.`);
+    }
+    widgets = { sources };
+  }
+
   const fonts: ResolvedFont[] = [];
   for (const [family, font] of Object.entries(raw.fonts ?? {})) {
     if (family === "montserrat") fail(name, `"montserrat" is built in. Give your font a different family name.`);
@@ -122,6 +132,7 @@ export function resolveConfig(raw: RippelConfig, root: string, configFile: strin
     entry,
     contract,
     mock,
+    widgets,
     display: resolveDisplay(d),
     mcu: raw.mcu,
     fonts,

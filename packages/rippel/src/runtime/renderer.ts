@@ -8,11 +8,69 @@
  */
 import { createRenderer } from "solid-js/universal";
 import type { ImageAsset } from "../jsx-runtime.js";
+import { coerce, type ValueType } from "../contract.js";
 import { EVENT, WIDGET, type Ptr, type WidgetType } from "./lvgl.js";
 import { lvgl } from "./host.js";
 import { forgetNode, setClasses, setInlineStyle, type InlineStyle, type StyledNode } from "./styles.js";
 
 type Handler = (value?: number) => void;
+
+interface CustomWidgetInfo {
+  jsName: string;
+  props: Record<string, ValueType>;
+}
+
+const customWidgets = new Map<string, CustomWidgetInfo>();
+
+/** Called by contract widgets before they create an element. */
+export function defineCustomWidget(name: string, jsName: string, props: Record<string, ValueType>): void {
+  customWidgets.set(name, { jsName, props });
+}
+
+const cName = (name: string) => name.replace(/[A-Z]/g, (c, i: number) => (i ? "_" : "") + c.toLowerCase());
+
+function placeholderText(node: ElementNode): string {
+  const info = customWidgets.get(node.customName!);
+  const values = Object.entries(node.placeholderValues).map(([k, v]) => `${k}: ${typeof v === "number" ? (Number.isInteger(v) && v > 0xffff ? `0x${v.toString(16)}` : Math.round(v * 100) / 100) : String(v)}`);
+  return [`<${info?.jsName ?? node.customName}>`, ...values].join("\n");
+}
+
+/** A labeled box standing in for a custom widget whose C isn't in this simulator build. */
+function createPlaceholder(name: string, parent: Ptr): { obj: Ptr; label: Ptr } {
+  const lv = lvgl();
+  const obj = lv.objCreate("view", parent);
+  const main = lv.constant("LV_PART_MAIN");
+  const num = (prop: string, value: number) => lv.objSetLocalNum(obj, lv.constant(prop), value, main);
+  num("LV_STYLE_MIN_WIDTH", 60);
+  num("LV_STYLE_MIN_HEIGHT", 40);
+  num("LV_STYLE_RADIUS", 6);
+  num("LV_STYLE_BORDER_WIDTH", 1);
+  num("LV_STYLE_BG_OPA", 60);
+  num("LV_STYLE_PAD_TOP", 4);
+  num("LV_STYLE_PAD_BOTTOM", 4);
+  num("LV_STYLE_PAD_LEFT", 6);
+  num("LV_STYLE_PAD_RIGHT", 6);
+  lv.objSetLocalColor(obj, lv.constant("LV_STYLE_BORDER_COLOR"), 0xa78bfa, main);
+  lv.objSetLocalColor(obj, lv.constant("LV_STYLE_BG_COLOR"), 0xa78bfa, main);
+  const label = lv.objCreate("label", obj);
+  lv.objSetLocalColor(label, lv.constant("LV_STYLE_TEXT_COLOR"), 0xeceef2, main);
+  lv.objCenter(label);
+  lv.labelSetText(label, name);
+  return { obj, label };
+}
+
+function setCustomProp(node: ElementNode, name: string, value: unknown) {
+  const info = customWidgets.get(node.customName!);
+  const type = info?.props[name];
+  if (!type) throw new Error(`<${info?.jsName ?? node.customName}> has no "${name}" prop`);
+  const coerced = coerce(type, value);
+  if (node.placeholderLabel) {
+    node.placeholderValues[name] = coerced;
+    lvgl().labelSetText(node.placeholderLabel, placeholderText(node));
+    return;
+  }
+  lvgl().customSet(`ui_widget_${node.customName}_set_${cName(name)}`, node.obj, coerced, type.kind);
+}
 
 /** Widgets whose only value event is onChange, fired when the user changes them. */
 const CHANGE_WIDGETS = ["switch", "checkbox", "dropdown"];
@@ -38,8 +96,12 @@ export class ElementNode implements StyledNode {
   range: [number, number] = [0, 100];
   name: string | undefined;
   dead = false;
+  /** For custom widgets: the C name, and the label of the placeholder shown when the widget's C isn't compiled in. */
+  customName: string | undefined;
+  placeholderLabel: Ptr = 0;
+  placeholderValues: Record<string, unknown> = {};
   constructor(
-    public readonly type: WidgetType | "root",
+    public readonly type: WidgetType | "root" | "custom",
     public readonly obj: Ptr,
   ) {}
 }
@@ -160,7 +222,7 @@ function imagePointer(asset: ImageAsset): Ptr {
 }
 
 /** Setters for widgets that have a range and a value. */
-function rangedSetters(type: WidgetType | "root") {
+function rangedSetters(type: WidgetType | "root" | "custom") {
   const lv = lvgl();
   switch (type) {
     case "slider": return { range: lv.sliderSetRange, value: lv.sliderSetValue };
@@ -173,6 +235,12 @@ function rangedSetters(type: WidgetType | "root") {
 function setProperty(node: RNode, name: string, value: unknown): void {
   if (node.kind !== "element") return;
   const lv = lvgl();
+
+  // A custom widget's own props come first, so they can share names like `value`.
+  if (node.type === "custom" && customWidgets.get(node.customName!)?.props[name]) {
+    setCustomProp(node, name, value);
+    return;
+  }
 
   if (name.startsWith("on")) {
     const allowed =
@@ -209,6 +277,10 @@ function setProperty(node: RNode, name: string, value: unknown): void {
     case "checked":
       lv.objSetState(node.obj, lv.constant("LV_STATE_CHECKED"), Boolean(value));
       return;
+  }
+
+  if (node.type === "custom") {
+    throw new Error(`<${customWidgets.get(node.customName!)?.jsName ?? node.customName}> has no "${name}" prop`);
   }
 
   const ranged = rangedSetters(node.type);
@@ -284,6 +356,17 @@ export const {
   use,
 } = createRenderer<RNode>({
   createElement(tag) {
+    if (tag.startsWith("custom:")) {
+      const lv = lvgl();
+      const name = tag.slice("custom:".length);
+      const real = lv.customCreate(name, lv.detachedRoot());
+      const placeholder = real === undefined ? createPlaceholder(customWidgets.get(name)?.jsName ?? name, lv.detachedRoot()) : undefined;
+      const node = new ElementNode("custom", real ?? placeholder!.obj);
+      node.customName = name;
+      if (placeholder) node.placeholderLabel = placeholder.label;
+      nodesByObj.set(node.obj, node);
+      return node;
+    }
     if (!(tag in WIDGET)) {
       throw new Error(`Unknown element <${tag}>. Available: ${Object.keys(WIDGET).map((t) => `<${t}>`).join(", ")}`);
     }
