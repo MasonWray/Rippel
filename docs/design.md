@@ -251,12 +251,12 @@ Notes from bringing it up on the board:
 - **Branch state:** local signals inside a `<Show>` or `<Switch>` branch reset when it reopens, as they do in the dev runtime.
 - **`createList`** holds records that change at runtime. It takes a fixed `capacity` and field types from the contract, like `{ rating: u8, name: str(16) }`, so storage is reserved at build time and strings have a known size. The device builds one row per slot up front, shows the slots in use, and moves rows when the order changes. Adding to a full list drops the oldest item.
 - **Images** come from importing a `.png` and passing it to `<image src>`. They're converted to the display's pixel format at build time and stored in flash, as RGB565, or RGB565A8 when they have transparency. `src` can change at runtime between images known at build time. `image-recolor` tints an image, and `fit` scales it, which costs CPU on every redraw.
+- **Firmware lists** are declared in the contract with `list({ capacity, fields })`. The UI reads them like a `createList` list but can't change them. The firmware fills them through generated `ui_<name>_add`, `_update`, `_remove` and `_clear` functions, where `add` returns an id for the other calls. In dev, the mock and the signals panel can fill them too.
 - `output.lvglHeapKB` sets LVGL's memory. Every branch is built up front, so a UI with several screens needs more than one screen's worth.
 
 Still to come:
 
 
-- Lists pushed from firmware through the contract
 - More widgets, images, animations, multiple screens and navigation
 - Single-binary compiler (decision 10)
 - More integrations (Zephyr, PlatformIO), more MCU and display presets
@@ -267,7 +267,7 @@ Still to come:
 1. **Numeric types (settled for now).** Inferred, as described under M2. Wider integer types for locals may be needed later.
 2. **Signals in C (settled).** Generated setters and bind functions. See M2.
 3. **`<Show>` default.** M2 hides prebuilt objects, which keeps memory predictable. Creating and destroying them could become an option for screens that are rarely open.
-4. **Firmware-provided lists.** `createList` settles storage for lists owned by the UI. A firmware-side list needs a way to declare and push it through the contract.
+4. **Firmware-provided lists (settled).** Declared in the contract with a capacity, like `createList`. See M3.
 5. **LVGL version.** Pin one version per Rippel release? Allow user-supplied `lv_conf.h` overrides?
 6. **Reference hardware (settled).** An Adafruit QT Py ESP32-S3 and the Adafruit 3.5" 480×320 TFT.
 7. **Package name.** `rippel` is unclaimed on npm as of 2026-11-07. Reserve it, and decide whether to use one package or a scope (`@rippel/*`).

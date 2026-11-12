@@ -11,11 +11,15 @@ import {
   onActionCall,
   type ActionMeta,
   type FirmwareAction,
+  type FirmwareList,
+  type FirmwareListHandle,
   type FirmwareSignal,
+  type ListMeta,
   type SignalMeta,
   type ValueOf,
   type ValueType,
 } from "./contract.js";
+import type { ListFields } from "./list.js";
 
 export interface MockContext {
   /** Pushes a signal value, as the firmware's generated setter would. */
@@ -27,6 +31,8 @@ export interface MockContext {
   ): void;
   /** Runs `tick` every `ms` milliseconds, passing the time since the last run. */
   every(ms: number, tick: (elapsedMs: number) => void): void;
+  /** The firmware's side of a list: add, update, remove and clear, as the generated C functions do. */
+  list<F extends ListFields>(list: FirmwareList<F>): FirmwareListHandle<F>;
 }
 
 export type Mock = (context: MockContext) => void;
@@ -47,6 +53,10 @@ export function startMock(mock: Mock): void {
       onActionCall((call) => {
         if (call.meta === meta) batch(() => handler(call.args as never));
       });
+    },
+    list(list) {
+      const meta = contractMeta(list) as ListMeta<never>;
+      return meta.firmware as never;
     },
     every(ms, tick) {
       let last = performance.now();

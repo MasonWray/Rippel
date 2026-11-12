@@ -136,6 +136,12 @@ body {
 .rp-log li:first-child { border-top: 0; }
 .rp-log time { color: var(--rp-muted); }
 .rp-log code { overflow-wrap: anywhere; }
+.rp-list + .rp-list { margin-top: 12px; }
+.rp-list .rp-section-head { gap: 8px; justify-content: flex-start; }
+.rp-list .rp-link { margin-left: auto; }
+.rp-list li .rp-link { margin-left: auto; flex: none; }
+.rp-list-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.rp-list-add input[type="text"], .rp-list-add input[type="number"] { width: 90px; }
 .rp-link { border: 0; background: none; color: var(--rp-accent); font: inherit; cursor: pointer; padding: 0; }
 @media (max-width: 760px) {
   .rp-shell { grid-template-columns: 1fr; grid-template-rows: auto auto auto; height: auto; }

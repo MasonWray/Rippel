@@ -28,8 +28,8 @@ export interface RippelList<F extends ListFields> {
   sorted(compare: (a: ListItem<F>, b: ListItem<F>) => number): ListItem<F>[];
   /** Adds up `value` over every item. */
   sum(value: (item: ListItem<F>) => number): number;
-  /** Adds an item. When the list is full, the oldest item is dropped to make room. */
-  add(values: ListValues<F>): void;
+  /** Adds an item and returns its id. When the list is full, the oldest item is dropped to make room. */
+  add(values: ListValues<F>): number;
   remove(item: ListItem<F>): void;
   update(item: ListItem<F>, changes: Partial<ListValues<F>>): void;
 }
@@ -71,7 +71,9 @@ export function createList<F extends ListFields>(options: ListOptions<F>): Rippe
     sum: (value) => items().reduce((total, item) => total + value(item), 0),
     add(values) {
       const kept = items().length >= capacity ? items().slice(1) : items();
-      setItems([...kept, makeItem(values)]);
+      const item = makeItem(values);
+      setItems([...kept, item]);
+      return item.id;
     },
     remove(item) {
       setItems(items().filter((i) => i !== item));

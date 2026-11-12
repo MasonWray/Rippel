@@ -2,7 +2,9 @@
  * Firmware mock panel: a control for every contract signal and a log of
  * every action call, so the UI can be exercised without hardware.
  */
-import { coerce, contractMeta, onActionCall, type ActionCall, type SignalMeta } from "../contract.js";
+import { createEffect, createRoot } from "solid-js";
+import { coerce, contractMeta, onActionCall, type ActionCall, type ListMeta, type SignalMeta } from "../contract.js";
+import type { ValueType } from "../contract.js";
 import { h } from "./dom.js";
 
 function signalControl(meta: SignalMeta): HTMLElement {
@@ -63,6 +65,60 @@ function signalControl(meta: SignalMeta): HTMLElement {
   return wrap;
 }
 
+function fieldInput(name: string, type: ValueType): { el: HTMLInputElement; read: () => unknown } {
+  if (type.kind === "bool") {
+    const el = h("input", { type: "checkbox", "aria-label": name });
+    return { el, read: () => el.checked };
+  }
+  if (type.kind === "string") {
+    const el = h("input", { type: "text", "aria-label": name, placeholder: name, maxLength: type.maxLength });
+    return { el, read: () => el.value };
+  }
+  const el = h("input", { type: "number", "aria-label": name, placeholder: name, value: "0" });
+  return { el, read: () => el.value };
+}
+
+/** A firmware list: its items, with controls to add, remove and clear them as the firmware would. */
+function listSection(meta: ListMeta): HTMLElement {
+  const fields = Object.entries(meta.fields);
+  const count = h("span", { class: "rp-type" });
+  const rows = h("ol", { class: "rp-log" });
+  const clear = h("button", { class: "rp-link", type: "button" }, "Clear");
+  clear.addEventListener("click", () => meta.firmware.clear());
+
+  createRoot(() =>
+    createEffect(() => {
+      const items = meta.list.items();
+      count.textContent = `${items.length} of ${meta.capacity}`;
+      rows.replaceChildren(
+        ...items.map((item) => {
+          const values = item as unknown as Record<string, unknown>;
+          const text = fields.map(([field]) => `${field}: ${JSON.stringify(values[field])}`).join(", ");
+          const remove = h("button", { class: "rp-link", type: "button" }, "Remove");
+          remove.addEventListener("click", () => meta.firmware.remove(item.id));
+          return h("li", {}, h("code", {}, `#${item.id} ${text}`), remove);
+        }),
+      );
+    }),
+  );
+
+  const inputs = fields.map(([field, type]) => ({ field, type, ...fieldInput(field, type) }));
+  const add = h("button", { class: "rp-link", type: "button" }, "Add");
+  add.addEventListener("click", () => {
+    const values: Record<string, unknown> = {};
+    for (const input of inputs) values[input.field] = coerce(input.type, input.read());
+    meta.firmware.add(values as never);
+  });
+
+  return h(
+    "div",
+    { class: "rp-list" },
+    h("div", { class: "rp-section-head" }, h("span", { class: "rp-signal-name" }, meta.name ?? "list"), count, clear),
+    rows,
+    h("div", { class: "rp-list-add" }, ...inputs.map((i) => i.el), add),
+  );
+}
+
 function formatCall(call: ActionCall): string {
   const args = Object.entries(call.args)
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
@@ -72,13 +128,16 @@ function formatCall(call: ActionCall): string {
 
 export function createPanel(contract: Record<string, unknown> | undefined): HTMLElement {
   const signals = h("div", { class: "rp-signals" });
+  const lists: HTMLElement[] = [];
   const actions: string[] = [];
 
   for (const [name, value] of Object.entries(contract ?? {})) {
     const meta = contractMeta(value);
     if (!meta) continue;
     meta.name = name;
-    if (meta.kind === "signal") {
+    if (meta.kind === "list") {
+      lists.push(listSection(meta));
+    } else if (meta.kind === "signal") {
       signals.append(
         h(
           "label",
@@ -119,6 +178,7 @@ export function createPanel(contract: Record<string, unknown> | undefined): HTML
         ? signals
         : h("p", { class: "rp-empty" }, hasContract ? "The contract declares no signals." : "No firmware contract found."),
     ),
+    lists.length ? h("section", {}, h("h2", {}, "Firmware lists"), ...lists) : undefined,
     h("section", {},
       h("div", { class: "rp-section-head" }, h("h2", {}, "Action calls"), clear),
       actions.length ? h("p", { class: "rp-declared" }, actions.join("\n")) : undefined,

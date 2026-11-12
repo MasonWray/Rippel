@@ -14,13 +14,14 @@ afterEach(() => {
 });
 
 const CONTRACT = `
-  import { action, bool, f32, i16, signal, str, u8 } from "rippel/contract";
+  import { action, bool, f32, i16, list, signal, str, u8 } from "rippel/contract";
   export const temperature = signal(i16, { initial: 20 });
   export const level = signal(f32);
   export const online = signal(bool, { initial: true });
   export const name = signal(str(16), { initial: "hi" });
   export const battery = signal(u8);
   export const setpoint = action({ celsius: i16 });
+  export const networks = list({ capacity: 4, fields: { ssid: str(16), rssi: i16 } });
 `;
 
 /** Writes a project to a temp folder, builds it and returns its generated files. */
@@ -243,6 +244,35 @@ describe("rippel build", () => {
 
     it("rejects other image formats", async () => {
       await expect(build({ ...app(`return <view />;`, `import pic from "./pic.jpg";`), "src/pic.jpg": "x" })).rejects.toThrow(/Only .png/);
+    });
+  });
+
+  describe("firmware lists", () => {
+    const listUi = (body: string) => ({
+      "src/App.tsx": `
+        import { For } from "rippel";
+        import { networks, setpoint } from "./firmware.contract";
+        export default function App() { ${body} }
+      `,
+    });
+
+    it("gives the firmware add, update, remove and clear", async () => {
+      const { header, ui } = await build(listUi(`return <view><For each={networks.sorted((a, b) => b.rssi - a.rssi)}>{(n) => <label>{n.ssid}</label>}</For></view>;`));
+      expect(header).toContain("uint32_t ui_networks_add(const char * ssid, int16_t rssi);");
+      expect(header).toContain("void ui_networks_update(uint32_t id, const char * ssid, int16_t rssi);");
+      expect(header).toContain("void ui_networks_remove(uint32_t id);");
+      expect(header).toContain("void ui_networks_clear(void);");
+      expect(ui).toContain("static list_networks_item_t list_networks[4] = {");
+      expect(ui).toContain("lv_strlcpy(list_networks[0].ssid, value, sizeof(list_networks[0].ssid));");
+    });
+
+    it("lets the UI pass an item's fields to an action", async () => {
+      const { ui } = await build(listUi(`return <view><For each={networks.items()}>{(n) => <button onClick={() => setpoint({ celsius: n.rssi })}>{n.ssid}</button>}</For></view>;`));
+      expect(ui).toContain("actions.setpoint((int16_t)list_networks[0].rssi);");
+    });
+
+    it("doesn't let the UI change a firmware list", async () => {
+      await expect(build(listUi(`return <button onClick={() => networks.add({ ssid: "x", rssi: 1 })}>Add</button>;`))).rejects.toThrow(/firmware fills/);
     });
   });
 

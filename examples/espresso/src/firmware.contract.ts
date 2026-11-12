@@ -1,4 +1,4 @@
-import { action, bool, f32, signal, u16, u8 } from "rippel/contract";
+import { action, bool, f32, i8, list, signal, str, u16, u8 } from "rippel/contract";
 
 /** Boiler temperature in °C. */
 export const boilerC = signal(f32, { initial: 62 });
@@ -20,6 +20,15 @@ export const flowMlS = signal(f32);
 
 /** Weight in the cup in grams, from the scale in the drip tray. */
 export const weightG = signal(f32);
+
+/** Wi-Fi networks from the latest scan, with signal strength in dBm. The firmware fills this list. */
+export const wifiNetworks = list({ capacity: 8, fields: { ssid: str(32), rssi: i8, secure: bool } });
+
+/** The network the machine is connected to, or "" if none. */
+export const wifiSsid = signal(str(32));
+
+/** Asks the firmware to join a network. */
+export const connectWifi = action({ ssid: str(32) });
 
 /** Asks the firmware to hold the boiler at this temperature. */
 export const setBoilerTarget = action({ celsius: u8 });

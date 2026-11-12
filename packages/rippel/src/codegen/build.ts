@@ -80,6 +80,10 @@ function emitHeader(program: UiProgram, handles: Obj[]): string {
     }
     lines.push("} ui_actions_t;", "", "void ui_set_actions(const ui_actions_t * actions);");
   }
+  if (program.exports.length) {
+    lines.push("", "/* Firmware lists. Call these from the task that runs LVGL. */");
+    for (const e of program.exports) lines.push(`/* ${e.comment} */`, `${e.signature};`);
+  }
   if (handles.length) {
     lines.push("", "/* Objects named with `id`, for the rare case the firmware needs raw LVGL access. */", "typedef enum {");
     for (const o of handles) lines.push(`    UI_OBJ_${o.handle},`);
@@ -158,6 +162,9 @@ function emitSource(program: UiProgram, styleDecls: string[], styleInit: string[
 
   if (program.functions.length) out.push("/* List helpers */", "");
   for (const f of program.functions) out.push(...functionBlock(f.signature, f.body));
+
+  if (program.exports.length) out.push("/* Firmware lists */", "");
+  for (const e of program.exports) out.push(...functionBlock(e.signature, e.body));
 
   if (program.handlers.length) out.push("/* Event handlers */", "");
   for (const h of program.handlers) {

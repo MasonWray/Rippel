@@ -9,13 +9,21 @@ import { RECIPES, pressureAt, segmentAt, type Recipe } from "./recipes";
 
 const PHASE_DONE = 4;
 
+const WIFI_NETWORKS = [
+  { ssid: "Kitchen", rssi: -48, secure: true },
+  { ssid: "Cafe Guest", rssi: -61, secure: false },
+  { ssid: "Upstairs", rssi: -67, secure: true },
+  { ssid: "Printer-2F4A", rssi: -72, secure: false },
+  { ssid: "Neighbor-5G", rssi: -79, secure: true },
+];
+
 interface RunningShot {
   recipe: Recipe;
   yieldG: number;
   seconds: number;
 }
 
-export default defineMock(({ set, on, every }) => {
+export default defineMock(({ set, on, every, list }) => {
   let boiler = fw.boilerC();
   let boilerTarget = RECIPES[0].tempC;
   let shot: RunningShot | undefined;
@@ -48,6 +56,28 @@ export default defineMock(({ set, on, every }) => {
 
   on(fw.stopShot, finish);
   on(fw.ackShot, () => set(fw.phase, 0));
+
+  // Wi-Fi: the first scan finds networks after a moment, then their signal strength drifts
+  // and one network comes and goes.
+  const wifi = list(fw.wifiNetworks);
+  const networks = WIFI_NETWORKS.map((n) => ({ ...n, id: 0 }));
+  let scans = 0;
+  on(fw.connectWifi, ({ ssid }) => set(fw.wifiSsid, ssid));
+  every(2000, () => {
+    scans++;
+    for (const network of networks) {
+      const flaky = network.ssid === "Neighbor-5G";
+      const visible = !flaky || Math.floor(scans / 5) % 2 === 0;
+      if (!visible) {
+        if (network.id) wifi.remove(network.id);
+        network.id = 0;
+        continue;
+      }
+      network.rssi = Math.max(-90, Math.min(-35, network.rssi + Math.round((Math.random() - 0.5) * 6)));
+      if (network.id) wifi.update(network.id, network);
+      else network.id = wifi.add(network);
+    }
+  });
 
   every(40, (ms) => {
     const dt = ms / 1000;
