@@ -91,7 +91,8 @@ const [items, setItems] = createSignal([]); // no: use createList
 - Destructuring props builds, but it breaks reactivity in the preview, as in Solid. Read `props.x`.
 - Props can carry values, setters and callbacks: `<Param value={level()} onInput={setLevel} />`.
 - **State shared across screens goes at module level**, usually in a `src/state.ts` file. `export const [tab, setTab] = createSignal(0);` works there, along with derived functions, helpers that set signals or call actions, and `createList`. Signals created inside a component belong to that component. In a `lazy` branch, they restart from their initial value each time the branch opens.
-- A `label` can mix text and expressions: `<label>Target {target()}°C</label>`.
+- A `label` can mix text and expressions: `<label>Target {target()}°C</label>`. As in Solid, a run of spaces in JSX text becomes one space. To keep more, write them as a string: `{hour}:00{"  "}{temp}°`.
+
 ### Expressions (anything shown or bound in JSX)
 
 Allowed:
