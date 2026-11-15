@@ -172,7 +172,7 @@ const TEXT_DECOR: Record<string, string> = {
 };
 
 /** CSS properties that can animate, and the LVGL properties each one animates. */
-const TRANSITION_PROPS: Record<string, string[]> = {
+export const TRANSITION_PROPS: Record<string, string[]> = {
   background: ["LV_STYLE_BG_COLOR", "LV_STYLE_BG_OPA"],
   "background-color": ["LV_STYLE_BG_COLOR", "LV_STYLE_BG_OPA"],
   color: ["LV_STYLE_TEXT_COLOR", "LV_STYLE_TEXT_OPA"],

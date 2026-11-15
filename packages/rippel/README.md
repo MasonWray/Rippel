@@ -113,6 +113,14 @@ The UI component tells LVGL to compile against its own `lv_conf.h`, so the setti
 
 You can draw parts of the UI with your own LVGL C code. On the device they compile into the UI component. In the browser, the simulator only runs them when it's built from a clone of the Rippel repo with Emscripten installed. Otherwise `rippel dev` shows a labelled placeholder in their place.
 
+## Using Rippel with coding agents
+
+Rippel's TSX looks like SolidJS, but it compiles to C, so a lot of ordinary Solid and web code won't build. The package includes a guide for AI coding agents that covers the differences and how to check work. Add a line like this to your project's `AGENTS.md` or `CLAUDE.md`:
+
+```markdown
+This project's UI uses Rippel. Before changing anything under src/, read node_modules/rippel/docs/agent-guide.md.
+```
+
 ## More
 
 The [Rippel repository](https://github.com/MasonWray/Rippel) has two full example projects with firmware for real boards, and a [design doc](https://github.com/MasonWray/Rippel/blob/main/docs/design.md) covering what the compiler supports.
