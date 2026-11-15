@@ -1,6 +1,6 @@
 {
   "name": "rippel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Build embedded display UIs for microcontrollers with TSX and CSS, rendered by LVGL.",
   "keywords": [
     "lvgl",
