@@ -1,11 +1,13 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PNG } from "pngjs";
+import { checkProject } from "../node/check.js";
 import { resolveConfig } from "../node/load-config.js";
 import { buildProject } from "./build.js";
-import { CodegenError } from "./compile.js";
+import { CodegenError, trimJsxText } from "./compile.js";
 
 const roots: string[] = [];
 
@@ -553,5 +555,119 @@ describe("rippel build", () => {
     );
     expect(ui).toContain("switch(sig_temperature) {");
     expect(ui).toContain("case 1:");
+  });
+});
+
+/** Writes a project to a temp folder and returns its config, without building it. */
+function project(files: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), "rippel-check-"));
+  roots.push(root);
+  for (const [path, text] of Object.entries({ "src/firmware.contract.ts": CONTRACT, ...files })) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+  return resolveConfig({ display: { width: 320, height: 240 }, output: { dir: "out", integration: "esp-idf" } }, root, join(root, "rippel.config.ts"));
+}
+
+/** The text Solid's compiler gives a <label>, as the dev preview renders it. */
+function solidText(text: string): string {
+  const require = createRequire(import.meta.url);
+  const { transformSync } = require("@babel/core") as typeof import("@babel/core");
+  const out = transformSync(`<label>${text}</label>`, {
+    filename: "x.tsx",
+    babelrc: false,
+    configFile: false,
+    presets: [[require.resolve("babel-preset-solid"), { generate: "universal", moduleName: "rippel/renderer" }]],
+  });
+  return /createTextNode\(`([^`]*)`\)/.exec(out?.code ?? "")?.[1] ?? "";
+}
+
+describe("matches the dev preview", () => {
+  it("shows <For>'s fallback when a runtime list is empty", async () => {
+    const { ui } = await build({
+      "src/App.tsx": `
+        import { For } from "rippel";
+        import { networks } from "./firmware.contract";
+        export default function App() {
+          return <view><For each={networks.items()} fallback={<label class="none">No networks</label>}>{(n) => <label>{n.ssid}</label>}</For></view>;
+        }
+      `,
+    });
+    expect(ui).toContain('"No networks"');
+    expect(ui).toMatch(/int32_t active = \(\w+ == 0\) \? 0 : -1;/);
+    expect(ui).toContain("lv_obj_set_hidden(o_none, active != 0);");
+  });
+
+  it("shows <For>'s fallback for an empty constant list, and drops it otherwise", async () => {
+    const empty = await build(app(`return <view><For each={NONE} fallback={<label>Empty</label>}>{(n) => <label>{n}</label>}</For></view>;`, `const NONE: string[] = [];`));
+    expect(empty.ui).toContain('rp_label_set_text(o_label, "Empty");');
+    const full = await build(app(`return <view><For each={["a"]} fallback={<label>Empty</label>}>{(n) => <label>{n}</label>}</For></view>;`));
+    expect(full.ui).not.toContain('"Empty"');
+    expect(full.ui).toContain('rp_label_set_text(o_label, "a");');
+  });
+
+  it("treats whitespace in JSX text the way Solid's compiler does", async () => {
+    const samples = ["a  b", "a \t b", " lead and trail ", "\n    one   two\n    three\n  ", "first  \n   second"];
+    for (const sample of samples) expect(trimJsxText(sample), JSON.stringify(sample)).toBe(solidText(sample));
+    const { ui } = await build(app(`return <label>a  b</label>;`));
+    expect(ui).toContain('rp_label_set_text(o_label, "a b");');
+  });
+});
+
+describe("reports with a location", () => {
+  it("a color that changes at runtime in an inline style", async () => {
+    await expect(build(app(`return <view style={{ backgroundColor: temperature() > 1 ? "red" : "blue" }} />;`))).rejects.toMatchObject({
+      name: "CodegenError",
+      line: 5,
+      message: expect.stringMatching(/"backgroundColor" can't change at runtime .* Only lengths, like width and height, can/),
+    });
+  });
+
+  it("an inline style property that isn't supported", async () => {
+    await expect(build(app(`return <view style={{ cursor: temperature() > 1 ? "a" : "b" }} />;`))).rejects.toMatchObject({
+      name: "CodegenError",
+      message: expect.stringMatching(/Unsupported CSS property "cursor"/),
+    });
+    // A bad constant points at its own property, not the whole object.
+    const body = `return <view style={{ width: 10, color: "nope" }} />;`;
+    const line = app(body)["src/App.tsx"].split("\n")[4];
+    await expect(build(app(body))).rejects.toMatchObject({
+      name: "CodegenError",
+      line: 5,
+      column: line.indexOf("color:") + 1,
+      message: expect.stringMatching(/^color: Expected a color/),
+    });
+  });
+
+  it("a stylesheet that doesn't exist", async () => {
+    await expect(build({ "src/App.tsx": `import "./missing.css";\nexport default function App() { return <view />; }` })).rejects.toMatchObject({
+      name: "CodegenError",
+      line: 1,
+      column: 8,
+      message: `Can't find "./missing.css"`,
+    });
+  });
+
+  it("a module-level let, pointing at signals", async () => {
+    for (const read of ["count", "count()"]) {
+      await expect(build(app(`return <label>{${read}}</label>;`, `let count = 0;`))).rejects.toMatchObject({
+        name: "CodegenError",
+        message: expect.stringMatching(/^Module-level `let` variables aren't supported .*Use a signal/),
+      });
+    }
+  });
+});
+
+describe("rippel check", () => {
+  it("runs the compiler, so code that passes check builds", async () => {
+    const config = project(app(`return <label>{count}</label>;`, `let count = 0;`));
+    const { problems } = await checkProject(config);
+    expect(problems).toEqual([expect.stringMatching(/^src[\\/]App\.tsx:\d+:\d+ {2}Module-level `let` variables/)]);
+    // `rippel build` compiles straight after, so it skips the compile step.
+    expect((await checkProject(config, { compile: false })).problems).toEqual([]);
+  });
+
+  it("passes code that builds", async () => {
+    expect(await checkProject(project(app(`return <view />;`)))).toEqual({ problems: [], warnings: [] });
   });
 });

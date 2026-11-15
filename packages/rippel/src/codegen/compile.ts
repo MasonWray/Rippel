@@ -12,7 +12,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { basename, dirname, extname, resolve } from "node:path";
 import { parseSync, type types as t } from "@babel/core";
-import { translateDeclarations, inlineDeclarations } from "../style/translate.js";
+import { StyleError, translateDeclarations, inlineDeclarations } from "../style/translate.js";
 import { widgetCreate, widgetFromShape, widgetSetter, type CustomWidget } from "./widgets.js";
 import type { StyleContext, StyleDecl } from "../style/ir.js";
 
@@ -340,7 +340,7 @@ function floatLiteral(v: number): string {
 }
 
 /** Collapses JSX text whitespace the way Solid's compiler does. */
-function trimJsxText(text: string): string {
+export function trimJsxText(text: string): string {
   let s = text.replace(/\r/g, "");
   if (s.includes("\n")) {
     s = s
@@ -726,7 +726,10 @@ class Compiler {
   private bindImport(statement: t.ImportDeclaration, module: Module) {
     if (statement.importKind === "type") return;
     const source = statement.source.value;
-    if (source.endsWith(".css")) return;
+    if (source.endsWith(".css")) {
+      if (source.startsWith(".") && !existsSync(resolve(dirname(module.file), source))) this.fail(statement.source, module, `Can't find "${source}"`);
+      return;
+    }
     if (/\.(jpe?g|gif|webp|bmp|svg)$/i.test(source)) this.fail(statement, module, "Only .png images are supported for now");
     if (/\.png$/i.test(source)) {
       const file = resolve(dirname(module.file), source);
@@ -793,7 +796,10 @@ class Compiler {
       // Module state only matters if the UI that's being built reaches it.
       if (scope !== module.scope) this.fail(statement, module, "Use `const` here. Reactive state goes in a signal.");
       for (const decl of statement.declarations) {
-        if (decl.id.type === "Identifier") add(decl.id.name, { k: "unsupported", message: `Module-level \`${statement.kind}\` variables ${LATER_MANY}` });
+        if (decl.id.type === "Identifier") add(decl.id.name, {
+            k: "unsupported",
+            message: `Module-level \`${statement.kind}\` variables ${LATER_MANY}. Use a signal for state that changes, or \`const\` for a value that doesn't.`,
+          });
       }
       return bound;
     }
@@ -1023,6 +1029,7 @@ class Compiler {
         if (!found) this.fail(n, module, `"${n.name}" isn't defined`);
         if (found.k === "value") return found.expr;
         if (found.k === "lazy") return this.expr(found.node, found.scope, found.module);
+        if (found.k === "unsupported") this.fail(n, module, found.message);
         this.fail(n, module, `"${n.name}" can't be used as a value here. Signals are read by calling them: ${n.name}().`);
         break;
       }
@@ -2618,6 +2625,7 @@ class Compiler {
 
     if (name === "For" || name === "Index") {
       const each = attr("each");
+      const fallback = attr("fallback");
       const items = each && this.tryConst(each, scope, module);
       const content = el.children.find((c) => c.type === "JSXExpressionContainer" && c.expression.type !== "JSXEmptyExpression") as t.JSXExpressionContainer | undefined;
       const fn = content && unwrap(content.expression);
@@ -2628,9 +2636,19 @@ class Compiler {
         const view = name === "For" && each ? this.listView(each, scope, module) : undefined;
         if (!view) this.fail(el, module, `<${name}> needs a constant list, or the items of a list made with createList.`);
         this.runtimeFor(view, func, el, place, module);
+        if (fallback) {
+          // Built after the rows, so it sits where they would.
+          const size = this.readSignal(view.list.size);
+          this.branches([{ test: boolExpr(`${size.code} == 0`, size.deps), body: (p) => this.child(fallback, scope, module, p) }], place, el, module);
+        }
         return;
       }
 
+      // A constant list never changes, so its fallback shows only when the list is empty.
+      if (fallback && items.value.length === 0) {
+        this.child(fallback, scope, module, place);
+        return;
+      }
       items.value.forEach((item, i) => {
         this.instance++;
         const args: Binding[] =
@@ -3025,18 +3043,31 @@ class Compiler {
     const n = value && unwrap(value);
     if (n?.type !== "ObjectExpression") this.fail(value ?? ({} as t.Node), module, "`style` must be an object literal");
     const style: Record<string, string | number> = {};
+    const nodes: Record<string, t.Node> = {};
     for (const p of n.properties) {
       if (p.type !== "ObjectProperty" || p.key.type !== "Identifier") this.fail(p, module, `This kind of property ${LATER}`);
       const known = this.tryConst(p.value, scope, module);
       if (known && (typeof known.value === "string" || typeof known.value === "number")) {
         style[p.key.name] = known.value;
+        nodes[p.key.name] = p;
         continue;
       }
 
       // A length that changes at runtime: find its LVGL property by translating a sample value.
-      const sample = translateDeclarations(inlineDeclarations({ [p.key.name]: 1 }), this.input.styleContext);
+      let sample: StyleDecl[] = [];
+      try {
+        sample = translateDeclarations(inlineDeclarations({ [p.key.name]: 1 }), this.input.styleContext);
+      } catch (err) {
+        // A property that isn't supported at all says so. Any other error means it isn't a length.
+        if (!(err instanceof StyleError)) throw err;
+        if (err.message.includes("Unsupported CSS property")) this.fail(p, module, err.message);
+      }
       if (sample.length !== 1 || sample[0].value.t !== "num" || sample[0].value.v !== 1) {
-        this.fail(p.value, module, `"${p.key.name}" can't change at runtime in the device build yet. Lengths like width and height can.`);
+        this.fail(
+          p.value,
+          module,
+          `"${p.key.name}" can't change at runtime in the device build yet. Only lengths, like width and height, can. For other properties, write a class for each state and pick one in \`class\`.`,
+        );
       }
       const e = this.number(p.value, scope, module);
       this.bind("style", e.deps, obj, [`rp_obj_set_local_num(${obj.name}, ${sample[0].prop}, ${e.code}, LV_PART_MAIN);`]);
@@ -3045,7 +3076,9 @@ class Compiler {
     try {
       decls = translateDeclarations(inlineDeclarations(style), this.input.styleContext);
     } catch (err) {
-      this.fail(n, module, err instanceof Error ? err.message : String(err));
+      if (!(err instanceof StyleError)) throw err;
+      const key = err.declIndex === undefined ? undefined : Object.keys(style)[err.declIndex];
+      this.fail((key && nodes[key]) || n, module, err.message);
     }
     for (const { prop, value: v } of decls) {
       if (prop === "RP_FLOATING") {
@@ -3108,6 +3141,10 @@ export function cssImportOrder(entry: string): string[] {
       if (!source.startsWith(".")) continue;
       const base = resolve(dirname(file), source);
       if (source.endsWith(".css")) {
+        if (!existsSync(base)) {
+          const loc = statement.source.loc?.start;
+          throw new CodegenError(`Can't find "${source}"`, file, loc?.line ?? 1, (loc?.column ?? 0) + 1);
+        }
         if (!seen.has(base)) {
           seen.add(base);
           sheets.push(base);
