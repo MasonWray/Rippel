@@ -10,13 +10,13 @@ Run both of these from the project folder before you call a change done:
 
 ```bash
 npx tsc --noEmit        # types: unknown elements, wrong props, wrong contract argument types
-npx rippel build        # the real test: runs `rippel check`, then compiles the UI to C
+npx rippel check        # the real test: compiles the UI to C without writing any files
 ```
 
 Each tool catches something different:
 
-- **`rippel check`** catches banned syntax (classes, `async`, `try`, regex, `new`), banned imports and globals, and CSS errors. It's fast, but it **doesn't** run the compiler, so passing it doesn't mean the code will build.
-- **`rippel build`** runs `check`, then compiles to C. Most of the rules in this guide are enforced only here. It writes to `output.dir` in `rippel.config.ts`. To compile without touching that folder, pass `--out` with a scratch folder.
+- **`rippel check`** catches banned syntax (classes, `async`, `try`, regex, `new`), banned imports and globals, and CSS errors, then runs the compiler without writing any files. Most of the rules in this guide are enforced by the compiler. If `check` passes, `rippel build` will too.
+- **`rippel build`** does the same, then writes the C to `output.dir` in `rippel.config.ts`. Run it when the firmware needs the new code.
 - **`rippel dev`** runs the UI in the browser on the real LVGL renderer. The browser preview runs your TSX with real Solid, so **code that works in the preview can still fail `rippel build`**. Never treat a working preview as proof that the code compiles.
 
 Error messages give a file, line and column, and usually say what to do instead. Trust them over your Solid instincts. If a message says something "isn't supported by `rippel build` yet", rewrite the code in a supported way; don't work around the check.
@@ -91,8 +91,7 @@ const [items, setItems] = createSignal([]); // no: use createList
 - Destructuring props builds, but it breaks reactivity in the preview, as in Solid. Read `props.x`.
 - Props can carry values, setters and callbacks: `<Param value={level()} onInput={setLevel} />`.
 - **State shared across screens goes at module level**, usually in a `src/state.ts` file. `export const [tab, setTab] = createSignal(0);` works there, along with derived functions, helpers that set signals or call actions, and `createList`. Signals created inside a component belong to that component. In a `lazy` branch, they restart from their initial value each time the branch opens.
-- A `label` can mix text and expressions: `<label>Target {target()}°C</label>`. On the device, a run of spaces in JSX text becomes one space. To keep more, write them as a string: `{hour}:00{"  "}{temp}°`.
-
+- A `label` can mix text and expressions: `<label>Target {target()}°C</label>`.
 ### Expressions (anything shown or bound in JSX)
 
 Allowed:
@@ -161,7 +160,7 @@ Event props take a function: `onClick={save}` or `onClick={() => save(3)}`. Valu
 - **`<For each={…}>` takes a constant array** (unrolled at build time) **or a `createList` / contract `list`** (`list.items()`, `list.sorted(compare)`). It can't take `.map()` in JSX, or a constant array filtered by a signal. To show a filtered subset, keep the full constant list and set `hidden` or `checked` on each row from the signal.
 - Over a constant array, `<For>` passes `(item, index)` as in Solid, where `index` is an accessor: `index()`. `<Index>` also works over constant arrays and passes `(item, index)`, where `item` is an accessor and `index` is a number.
 - For a runtime list, each row must be a single element, and the index argument isn't available.
-- **The device build ignores `fallback` on `<For>`**, without an error. For an empty state, add `<Show when={list.size() === 0}>` next to the `<For>`.
+- `fallback={…}` on `<For>` or `<Index>` shows while the list is empty, as in Solid.
 
 ## Lists that change at runtime
 
@@ -297,7 +296,6 @@ Use `--target <name>` with `dev` or `build` to build the same UI for other hardw
 | `createSignal<Item[]>([])` | `createList({ capacity, fields })` |
 | `{items().map(i => <Row … />)}` | `<For each={list.items()}>{(i) => <Row … />}</For>` |
 | `{count() && <Badge />}` | `{count() > 0 && <Badge />}` |
-| `<For each={…} fallback={<Empty />}>` | `<For each={…}>` plus `<Show when={list.size() === 0}><Empty /></Show>` |
 | `` `${h}`.padStart(2, "0") `` | `` `${h < 10 ? "0" : ""}${h}` `` |
 | `name().length`, `.toUpperCase()` | precompute in firmware and push a signal, or use a constant table |
 | `value ?? fallback` | `cond ? value : fallback` |

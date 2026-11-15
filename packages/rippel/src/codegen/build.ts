@@ -428,11 +428,18 @@ async function loadRules(config: ResolvedConfig): Promise<StyleRule[]> {
   return rules;
 }
 
-export async function buildProject(config: ResolvedConfig, outDirOverride?: string): Promise<BuildResult> {
-  const out = outDirOverride ?? config.output?.dir;
-  if (!out) throw new Error("Set `output.dir` in rippel.config.ts, or pass --out <dir>.");
-  const outDir = resolve(config.root, out);
+/** A compiled project, before anything is written. */
+export interface CompiledProject {
+  rules: StyleRule[];
+  styles: ReturnType<typeof emitStyles>;
+  program: UiProgram;
+}
 
+/**
+ * Compiles the styles and the UI without writing anything. `rippel check`
+ * runs this, so code that passes check builds.
+ */
+export async function compileProject(config: ResolvedConfig): Promise<CompiledProject> {
   const rules = await loadRules(config);
   const styles = emitStyles(rules);
   const byClass = new Map<string, EmittedRule[]>();
@@ -457,6 +464,15 @@ export async function buildProject(config: ResolvedConfig, outDirOverride?: stri
       remove: (obj, classes) => rulesFor(classes).map((r) => `rp_obj_remove_style(${obj}, &${r.name}, ${r.selector});`),
     },
   });
+  return { rules, styles, program };
+}
+
+export async function buildProject(config: ResolvedConfig, outDirOverride?: string): Promise<BuildResult> {
+  const out = outDirOverride ?? config.output?.dir;
+  if (!out) throw new Error("Set `output.dir` in rippel.config.ts, or pass --out <dir>.");
+  const outDir = resolve(config.root, out);
+
+  const { rules, styles, program } = await compileProject(config);
 
   // Fonts: only those a style actually names are compiled in.
   const builtinSizes = new Set<number>();

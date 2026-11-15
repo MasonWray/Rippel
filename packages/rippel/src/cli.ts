@@ -1,25 +1,22 @@
 #!/usr/bin/env node
 /**
  * rippel dev    Start the browser dev runtime (simulated display + firmware mock panel).
- * rippel check  Validate UI code and styles without starting a server.
+ * rippel check  Validate UI code and styles, and compile them without writing anything.
  * rippel build  Generate the C code for the device.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { createServer } from "vite";
 import { buildProject } from "./codegen/build.js";
-import { CodegenError } from "./codegen/compile.js";
-import { ConfigError, loadConfig, styleContext } from "./node/load-config.js";
-import { validateSource } from "./node/validator.js";
-import { CssError, compileStyleSheet } from "./style/css.js";
+import { checkProject, locatedError } from "./node/check.js";
+import { ConfigError, loadConfig } from "./node/load-config.js";
 import { rippel } from "./vite/plugin.js";
 
 const HELP = `Usage: rippel <command> [options]
 
 Commands:
   dev      Start the dev runtime in the browser
-  check    Check UI code and styles for anything the device build can't compile
+  check    Check that the UI builds for the device, without writing files
   build    Generate C code for the device into output.dir
 
 Options:
@@ -49,49 +46,21 @@ async function dev(root: string, port: number | undefined, host: boolean) {
   server.bindCLIShortcuts({ print: true });
 }
 
-function listFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry.startsWith(".")) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...listFiles(full));
-    else out.push(full);
-  }
-  return out;
-}
-
-async function check(root: string): Promise<number> {
+/** Prints each problem. Returns the exit code. */
+async function check(root: string, compile = true): Promise<number> {
   const config = await loadConfig(root, target);
-  const srcDir = join(root, "src");
-  const ctx = styleContext(config);
-  let problems = 0;
-
-  for (const file of listFiles(srcDir)) {
-    const rel = relative(root, file);
-    // The mock is dev-only JS that plays the firmware. It never reaches the device.
-    if (config.mock && resolve(file) === resolve(config.mock)) continue;
-    if (/\.[cm]?[jt]sx?$/.test(file)) {
-      for (const issue of validateSource(readFileSync(file, "utf8"), file)) {
-        console.log(`${rel}:${issue.line}:${issue.column}  ${issue.message}`);
-        problems++;
-      }
-    } else if (file.endsWith(".css")) {
-      try {
-        compileStyleSheet(readFileSync(file, "utf8"), file, ctx);
-      } catch (err) {
-        if (!(err instanceof CssError)) throw err;
-        console.log(`${relative(root, err.loc.file)}:${err.loc.line}:${err.loc.column}  ${err.message.split("\n")[0]}`);
-        problems++;
-      }
-    }
-  }
-
-  console.log(problems ? `\n${problems} problem${problems === 1 ? "" : "s"} found.` : "No problems found.");
-  return problems ? 1 : 0;
+  const { problems, warnings } = await checkProject(config, { compile });
+  for (const line of problems) console.log(line);
+  for (const warning of warnings) console.log(`Warning: ${warning}`);
+  const n = problems.length;
+  // Without the compile step, "no problems" would speak too soon: build says how it went.
+  if (n) console.log(`\n${n} problem${n === 1 ? "" : "s"} found.`);
+  else if (compile) console.log("No problems found.");
+  return n ? 1 : 0;
 }
 
 async function build(root: string, out: string | undefined, entry: string | undefined): Promise<number> {
-  if ((await check(root)) !== 0) return 1;
+  if ((await check(root, false)) !== 0) return 1;
   const config = await loadConfig(root, target);
   if (entry) config.entry = resolve(root, entry);
   try {
@@ -104,11 +73,10 @@ async function build(root: string, out: string | undefined, entry: string | unde
     }
     return 0;
   } catch (err) {
-    if (err instanceof CodegenError) {
-      console.log(`${relative(root, err.file)}:${err.line}:${err.column}  ${err.message}`);
-      return 1;
-    }
-    throw err;
+    const located = locatedError(root, err);
+    if (!located) throw err;
+    console.log(located);
+    return 1;
   }
 }
 
