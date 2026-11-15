@@ -288,7 +288,7 @@ const CONTRACT_TYPES: Record<string, ValueInfo> = {
 
 const LATER = "isn't supported by `rippel build` yet";
 const LATER_MANY = "aren't supported by `rippel build` yet";
-const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar", image: "image", switch: "switch", checkbox: "checkbox", dropdown: "dropdown" };
+export const WIDGETS: Record<string, Widget> = { view: "view", label: "label", button: "button", slider: "slider", arc: "arc", bar: "bar", image: "image", switch: "switch", checkbox: "checkbox", dropdown: "dropdown" };
 const IMAGE_FIT: Record<string, string> = {
   none: "LV_IMAGE_ALIGN_CENTER",
   contain: "LV_IMAGE_ALIGN_CONTAIN",

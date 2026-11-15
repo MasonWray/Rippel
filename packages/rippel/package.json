@@ -94,6 +94,7 @@
     "wasm/rippel-lvgl.wasm",
     "wasm/rippel-lvgl.d.mts",
     "client.d.ts",
+    "docs",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {

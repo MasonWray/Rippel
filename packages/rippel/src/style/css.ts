@@ -8,7 +8,7 @@ import postcss, { type AtRule, type ChildNode, type Declaration, type Rule } fro
 import type { StyleContext, StyleRule, StyleSelector, StyleSheet } from "./ir.js";
 import { StyleError, translateDeclarations } from "./translate.js";
 
-const STATES: Record<string, string> = {
+export const STATES: Record<string, string> = {
   active: "LV_STATE_PRESSED",
   focus: "LV_STATE_FOCUSED",
   "focus-visible": "LV_STATE_FOCUS_KEY",
@@ -17,7 +17,7 @@ const STATES: Record<string, string> = {
   hover: "LV_STATE_HOVERED",
 };
 
-const PARTS: Record<string, string> = {
+export const PARTS: Record<string, string> = {
   indicator: "LV_PART_INDICATOR",
   knob: "LV_PART_KNOB",
   scrollbar: "LV_PART_SCROLLBAR",

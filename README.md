@@ -80,6 +80,7 @@ packages/rippel/          the npm package
   native/sim/             browser simulator platform and its lv_conf.h
   native/lvgl/            LVGL 9.6 (git submodule)
   wasm/                   prebuilt simulator (LVGL + bridge compiled to WASM)
+  docs/agent-guide.md     how to write Rippel code, for AI coding agents (ships in the package)
 examples/thermostat/      small example project
 examples/espresso/        full demo project
 docs/design.md            design doc
@@ -105,6 +106,8 @@ npm run build      # compile the package
 npm test           # unit tests
 npm run conformance  # checks that generated C draws the same pixels as the dev runtime (needs Emscripten)
 ```
+
+When you change what the compiler accepts, update `packages/rippel/docs/agent-guide.md` too. A test fails when the guide is missing an element, CSS property, state, part, export or hardware preset, but rules about expressions and handlers are only kept current by hand.
 
 The simulator WASM in `packages/rippel/wasm/` is prebuilt and committed, so you only need Emscripten if you change the C code or update LVGL:
 
