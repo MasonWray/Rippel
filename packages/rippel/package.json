@@ -1,8 +1,34 @@
 {
   "name": "rippel",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Build embedded display UIs for microcontrollers with TSX and CSS, rendered by LVGL.",
+  "keywords": [
+    "lvgl",
+    "embedded",
+    "microcontroller",
+    "esp32",
+    "esp-idf",
+    "display",
+    "ui",
+    "tsx",
+    "solid",
+    "codegen"
+  ],
+  "homepage": "https://github.com/MasonWray/Rippel#readme",
+  "bugs": {
+    "url": "https://github.com/MasonWray/Rippel/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MasonWray/Rippel.git",
+    "directory": "packages/rippel"
+  },
+  "license": "MIT",
+  "author": "Mason Wray",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "bin": {
     "rippel": "./dist/cli.js"
   },
@@ -61,15 +87,20 @@
   },
   "files": [
     "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "native/bridge",
     "wasm/rippel-lvgl.mjs",
     "wasm/rippel-lvgl.wasm",
     "wasm/rippel-lvgl.d.mts",
-    "client.d.ts"
+    "client.d.ts",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:wasm": "node scripts/build-wasm.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@babel/code-frame": "^7.29.7",

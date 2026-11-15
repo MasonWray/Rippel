@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mason Wray. Part of Rippel: https://github.com/MasonWray/Rippel */
 #include "rippel_bridge.h"
 #include <stddef.h>
 #include <string.h>

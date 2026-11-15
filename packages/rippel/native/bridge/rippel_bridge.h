@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Mason Wray. Part of Rippel: https://github.com/MasonWray/Rippel */
 /**
  * Rippel bridge: the small set of LVGL operations Rippel's renderers use.
  *
