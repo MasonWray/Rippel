@@ -30,7 +30,7 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "bin": {
-    "rippel": "./dist/cli.js"
+    "rippel": "dist/cli.js"
   },
   "exports": {
     ".": {
