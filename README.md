@@ -112,3 +112,7 @@ The simulator WASM in `packages/rippel/wasm/` is prebuilt and committed, so you 
 npm run setup:emsdk   # installs Emscripten 7.0.0 into .toolchain/ (about 1 GB, one time)
 npm run build:wasm    # incremental; add -- --clean after updating LVGL
 ```
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The prebuilt simulator includes LVGL, also MIT; see [THIRD_PARTY_NOTICES.md](packages/rippel/THIRD_PARTY_NOTICES.md).
