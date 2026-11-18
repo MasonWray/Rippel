@@ -1,0 +1,17 @@
+{
+  "name": "house-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rippel dev",
+    "build": "rippel build",
+    "check": "rippel check && tsc --noEmit",
+    "scene": "node scripts/scene-to-c.mjs scenes/linden.json firmware/widgets/house_scene.c"
+  },
+  "dependencies": {
+    "rippel": "*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

@@ -8,8 +8,10 @@
 #define BOARD_LCD_WIDTH  480
 #define BOARD_LCD_HEIGHT 320
 
-/* Start here. If the picture is clean, it can usually go higher. */
+/* Start here. If the picture is clean, it can usually go higher. A project can set its own. */
+#ifndef BOARD_LCD_SPI_HZ
 #define BOARD_LCD_SPI_HZ (20 * 1000 * 1000)
+#endif
 
 #define BOARD_PIN_SCK  GPIO_NUM_36 /* SCK */
 #define BOARD_PIN_MOSI GPIO_NUM_35 /* MO */

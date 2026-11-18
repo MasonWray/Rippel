@@ -38,6 +38,19 @@ Wait for the boiler to heat up, pick a recipe and press **Start shot**. Things t
 
 `examples/espresso/firmware` runs the same UI on an ESP32-S3 and a 480×320 display. Build it with `npm run build -w espresso-example`, then `idf.py build flash monitor` in that folder.
 
+## The house view spike
+
+`examples/house` tests whether ArkViz's 3D house view can run on a microcontroller. It draws an exploded axonometric of a house, its floors cut like plans with pools of light where lights are on. You can drag to turn it, and buttons stack the floors, spin the house and switch the lights.
+
+There's no 3D engine. The scene is an orthographic camera, flat colors and polygons stood up, so a custom C widget (`firmware/widgets/house_view.c`) projects it once a frame and fills each band LVGL draws with a small scanline rasterizer.
+
+```bash
+npm run build
+npm run dev -w house-example
+```
+
+The house comes from ArkViz: `node scripts/panel-scene.mjs [plan.json] -o scene.json` in the ArkViz repo exports one (the Linden House demo without a plan file). `npm run scene -w house-example` turns `scenes/linden.json` into `firmware/widgets/house_scene.c`. `firmware/` runs it on the reference S3 board and logs the frame rate and what each frame costs.
+
 ## What a Rippel project looks like
 
 ```

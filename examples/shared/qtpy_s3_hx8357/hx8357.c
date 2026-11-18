@@ -20,7 +20,8 @@
 #define MADCTL_MY 0x80
 #define MADCTL_MV 0x20
 
-/* 32 lines at a time. LVGL redraws dirty areas in strips of this size. */
+/* 32 lines at a time. LVGL redraws dirty areas in strips of this size, drawing the next strip into a second
+ * buffer while DMA sends the last one. */
 #define DRAW_BUF_LINES 32
 
 static const char * TAG = "hx8357";
@@ -118,10 +119,11 @@ lv_display_t * hx8357_create_display(void)
     ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io, CMD_DISPON, NULL, 0));
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    void * buf = heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    ESP_RETURN_ON_FALSE(buf, NULL, TAG, "No DMA memory for the draw buffer");
+    void * buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    void * buf2 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    ESP_RETURN_ON_FALSE(buf1 && buf2, NULL, TAG, "No DMA memory for the draw buffers");
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_buffers(disp, buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(disp, flush_cb);
     return disp;
 }

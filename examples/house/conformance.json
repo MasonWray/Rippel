@@ -1,0 +1,7 @@
+[
+  {"name": "stack the floors", "touch": [97, 296]},
+  {"name": "pull them apart again", "touch": [97, 296]},
+  {"name": "turn the house", "touch": [300, 140], "drag": [200, 160]},
+  {"name": "lights off", "touch": [313, 296]},
+  {"name": "lights on", "touch": [313, 296]}
+]
